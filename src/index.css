@@ -1,0 +1,46 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@450;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Print Overrides */
+@media print {
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Hide entire dashboard shell, sidebar navigation, buttons, and system controls */
+  #main-dashboard-wrapper,
+  aside,
+  header,
+  #workspace-tabs-navigator,
+  button,
+  .fixed,
+  .no-print {
+    display: none !important;
+  }
+
+  /* Make print sheet block occupy 100% of physical viewport height and width */
+  #print-sheet-content {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 1cm !important;
+    margin: 0 !important;
+    position: absolute;
+    left: 0;
+    top: 0;
+  }
+}
+

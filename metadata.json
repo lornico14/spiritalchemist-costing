@@ -1,0 +1,6 @@
+{
+  "name": "Spirit Alchemist BevCost",
+  "description": "Enterprise Beverage Costing Suite by Spirit Alchemist LLC. High-precision recipe building, universal ingredient catalog, historical comparison, and venue/user access control for global corporate standards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
