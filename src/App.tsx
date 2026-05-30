@@ -382,15 +382,20 @@ export default function App() {
       });
       setIngredients(list);
 
-      // Seed if empty and superadmin is logged in
+      // Seed if empty, superadmin is logged in, and NOT manually cleared
       if (list.length === 0 && currentUser.role === 'superadmin') {
-        INITIAL_INGREDIENTS.forEach(async (ing) => {
-          try {
-            await setDoc(doc(db, 'ingredients', ing.id), ing);
-          } catch (e) {
-            console.error('Seed ingredient fails:', e);
-          }
-        });
+        const alreadyCleared = localStorage.getItem('spirit_alchemist_manually_cleared_ingredients') === 'true';
+        if (!alreadyCleared) {
+          INITIAL_INGREDIENTS.forEach(async (ing) => {
+            try {
+              await setDoc(doc(db, 'ingredients', ing.id), ing);
+            } catch (e) {
+              console.error('Seed ingredient fails:', e);
+            }
+          });
+        }
+      } else if (list.length > 0) {
+        localStorage.removeItem('spirit_alchemist_manually_cleared_ingredients');
       }
     }, (error) => {
       if (error.message && error.message.includes('permission')) {
@@ -407,15 +412,20 @@ export default function App() {
       });
       setRecipes(list);
 
-      // Seed if empty and superadmin is logged in
+      // Seed if empty, superadmin is logged in, and NOT manually cleared
       if (list.length === 0 && currentUser.role === 'superadmin') {
-        INITIAL_RECIPES.forEach(async (rec) => {
-          try {
-            await setDoc(doc(db, 'recipes', rec.id), rec);
-          } catch (e) {
-            console.error('Seed recipe fails:', e);
-          }
-        });
+        const alreadyCleared = localStorage.getItem('spirit_alchemist_manually_cleared_recipes') === 'true';
+        if (!alreadyCleared) {
+          INITIAL_RECIPES.forEach(async (rec) => {
+            try {
+              await setDoc(doc(db, 'recipes', rec.id), rec);
+            } catch (e) {
+              console.error('Seed recipe fails:', e);
+            }
+          });
+        }
+      } else if (list.length > 0) {
+        localStorage.removeItem('spirit_alchemist_manually_cleared_recipes');
       }
     }, (error) => {
       if (error.message && error.message.includes('permission')) {
@@ -434,6 +444,10 @@ export default function App() {
   // Handle ingredient catalog updates (globally recalculated)
   const handleUpdateIngredients = async (updated: MasterIngredient[]) => {
     if (!currentUser) return;
+
+    if (updated.length === 0 && ingredients.length > 0) {
+      localStorage.setItem('spirit_alchemist_manually_cleared_ingredients', 'true');
+    }
 
     // Direct delta syncing to Firestore
     const updatedIds = new Set(updated.map((i) => i.id));
@@ -458,6 +472,25 @@ export default function App() {
           handleFirestoreError(err, OperationType.WRITE, `ingredients/${item.id}`);
         }
       }
+    }
+  };
+
+  const handleResetDemoData = async () => {
+    if (!currentUser || currentUser.role !== 'superadmin') return;
+    try {
+      localStorage.removeItem('spirit_alchemist_manually_cleared_ingredients');
+      localStorage.removeItem('spirit_alchemist_manually_cleared_recipes');
+
+      for (const ing of INITIAL_INGREDIENTS) {
+        await setDoc(doc(db, 'ingredients', ing.id), ing);
+      }
+      for (const rec of INITIAL_RECIPES) {
+        await setDoc(doc(db, 'recipes', rec.id), rec);
+      }
+      alert('¡Base de datos demo restablecida con éxito!');
+    } catch (e) {
+      console.error(e);
+      alert('Error al restablecer los datos demo.');
     }
   };
 
@@ -739,6 +772,9 @@ export default function App() {
   const confirmDeleteRecipe = async () => {
     if (recipeToDelete) {
       try {
+        if (recipes.length === 1) {
+          localStorage.setItem('spirit_alchemist_manually_cleared_recipes', 'true');
+        }
         await deleteDoc(doc(db, 'recipes', recipeToDelete.id));
         if (selectedRecipeId === recipeToDelete.id) {
           setSelectedRecipeId(null);
@@ -1177,6 +1213,14 @@ export default function App() {
                   >
                     Edit Ingredient Catalog
                   </button>
+                  {currentUser.role === 'superadmin' && (
+                    <button
+                      onClick={handleResetDemoData}
+                      className="px-4 py-2 text-xs font-bold bg-amber-500 hover:bg-amber-600 text-slate-900 rounded-lg transition cursor-pointer"
+                    >
+                      Restablecer Datos Demo (HQ)
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -1246,6 +1290,7 @@ export default function App() {
               onUpdateIngredients={handleUpdateIngredients}
               currentUser={currentUser} // Pass credentials down for tenant-based client locks!
               tenants={tenants}
+              onRestoreDemoData={handleResetDemoData}
             />
           </div>
         )}
