@@ -37,7 +37,8 @@ import {
   Building,
   Lock,
   Grid,
-  AlertCircle
+  AlertCircle,
+  Trash
 } from 'lucide-react';
 
 const INITIAL_TENANTS: Tenant[] = [
@@ -1086,7 +1087,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="text-right shrink-0 flex flex-col items-end">
+                    <div className="text-right shrink-0 flex flex-row items-center gap-2">
                       <span className="text-[10px] font-mono font-bold text-emerald-450">
                         {new Intl.NumberFormat('en-US', {
                           style: 'currency',
@@ -1102,10 +1103,10 @@ export default function App() {
                             e.stopPropagation();
                             setRecipeToDelete({ id: rec.id, name: rec.name });
                           }}
-                          className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-rose-950 text-slate-400 hover:text-rose-450 rounded transition absolute right-2 top-2 z-15"
+                          className="p-1 hover:bg-rose-950/60 text-slate-450 hover:text-rose-450 rounded transition cursor-pointer shrink-0"
                           title="Delete recipe"
                         >
-                          <X className="h-3 w-3" />
+                          <Trash className="h-3.5 w-3.5" />
                         </button>
                       )}
                     </div>
@@ -1302,6 +1303,9 @@ export default function App() {
             recipes={recipes} // Provide references to search sub-recipes
             masterIngredients={ingredients}
             onUpdateRecipe={handleUpdateRecipe}
+            onDeleteRecipe={(rec) => setRecipeToDelete({ id: rec.id, name: rec.name })}
+            currentUser={currentUser}
+            tenants={tenants}
             key={activeRecipe.id} // force refresh on switch
           />
         )}

@@ -43,6 +43,7 @@ interface RecipeCostingWorkspaceProps {
   key?: string | number;
   currentUser?: User | null;
   tenants?: Tenant[];
+  onDeleteRecipe?: (recipe: Recipe) => void;
 }
 
 export default function RecipeCostingWorkspace({
@@ -51,7 +52,8 @@ export default function RecipeCostingWorkspace({
   masterIngredients,
   onUpdateRecipe,
   currentUser,
-  tenants = []
+  tenants = [],
+  onDeleteRecipe
 }: RecipeCostingWorkspaceProps) {
   const [activeTab, setActiveTab] = useState<'costing' | 'history' | 'print'>('costing');
 
@@ -403,12 +405,24 @@ export default function RecipeCostingWorkspace({
                   Global Corporate Standard (Read Only)
                 </div>
               ) : (
-                <button
-                  onClick={handleStartEditing}
-                  className="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-650 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-sm transition cursor-pointer"
-                >
-                  Modify Recipe & Costings
-                </button>
+                <div className="flex items-center gap-2 w-full md:w-auto">
+                  <button
+                    onClick={handleStartEditing}
+                    className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-4 py-2.5 bg-indigo-650 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-sm transition cursor-pointer"
+                  >
+                    Modify Recipe & Costings
+                  </button>
+                  {onDeleteRecipe && (
+                    <button
+                      onClick={() => onDeleteRecipe(recipe)}
+                      className="px-3 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 font-semibold text-xs rounded-xl transition cursor-pointer border border-rose-150 inline-flex items-center gap-1.5 shrink-0"
+                      title="Borrar esta receta de una vez"
+                    >
+                      <Trash className="h-4 w-4" />
+                      <span>Delete Recipe</span>
+                    </button>
+                  )}
+                </div>
               )
             )}
           </div>
