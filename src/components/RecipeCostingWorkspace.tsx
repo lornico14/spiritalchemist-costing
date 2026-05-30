@@ -86,7 +86,16 @@ export default function RecipeCostingWorkspace({
 
   // Active snapshot representation
   const latestVersionSnapshot = useMemo(() => {
-    return recipe.versions.find((v) => v.version === recipe.currentVersion) || recipe.versions[0];
+    const found = recipe.versions.find((v) => v.version === recipe.currentVersion) || recipe.versions[0];
+    if (found) return found;
+    return {
+      version: 1,
+      note: 'Starter Version',
+      updatedAt: new Date().toISOString(),
+      batchYieldValue: 300,
+      batchYieldUnit: 'ml' as YieldUnit,
+      ingredients: [],
+    };
   }, [recipe]);
 
   // Combined selector choices of master ingredients + sub-recipes (excluding current recipe to prevent loops)

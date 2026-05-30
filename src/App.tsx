@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Recipe, MasterIngredient, RecipeVersion, YieldUnit, RecipeIngredient, User, Tenant } from './types';
 import { INITIAL_INGREDIENTS, INITIAL_RECIPES } from './data/initialData';
-import { auth, googleSignIn, logout as firebaseLogout, db, handleFirestoreError, OperationType } from './lib/firebase';
+import { auth, googleSignIn, logout as firebaseLogout, db } from './lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, setDoc, deleteDoc, query, where, onSnapshot } from 'firebase/firestore';
 import { calculateIngredientCost, calculateVersionCostWithSubrecipes, getRecipeTotalCost } from './utils/conversions';
@@ -399,11 +399,7 @@ export default function App() {
         localStorage.removeItem('spirit_alchemist_manually_cleared_ingredients');
       }
     }, (error) => {
-      if (error.message && error.message.includes('permission')) {
-        handleFirestoreError(error, OperationType.LIST, 'ingredients');
-      } else {
-        console.error('Ingredients subscription error:', error);
-      }
+      console.warn('Firestore subscription - ingredients channel offline or unconfigured. Falling back to Local Cache:', error);
     });
 
     const unsubRec = onSnapshot(qRec, (snapshot) => {
@@ -429,11 +425,7 @@ export default function App() {
         localStorage.removeItem('spirit_alchemist_manually_cleared_recipes');
       }
     }, (error) => {
-      if (error.message && error.message.includes('permission')) {
-        handleFirestoreError(error, OperationType.LIST, 'recipes');
-      } else {
-        console.error('Recipes subscription error:', error);
-      }
+      console.warn('Firestore subscription - recipes channel offline or unconfigured. Falling back to Local Cache:', error);
     });
 
     return () => {
@@ -450,27 +442,31 @@ export default function App() {
       localStorage.setItem('spirit_alchemist_manually_cleared_ingredients', 'true');
     }
 
+    // OPTIMISTIC LOCAL STATE UPDATE - instant and persistent in browser cache
+    setIngredients(updated);
+    localStorage.setItem('spirit_alchemist_ingredients', JSON.stringify(updated));
+
     // Direct delta syncing to Firestore
     const updatedIds = new Set(updated.map((i) => i.id));
     const deleted = ingredients.filter((i) => !updatedIds.has(i.id));
 
-    // Handle deletions
+    // Handle deletions in background
     for (const item of deleted) {
       try {
         await deleteDoc(doc(db, 'ingredients', item.id));
       } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `ingredients/${item.id}`);
+        console.warn('Firestore fallback sync - Delete ingredient failed:', err);
       }
     }
 
-    // Handle creations / modifications
+    // Handle creations / modifications in background
     for (const item of updated) {
       const match = ingredients.find((i) => i.id === item.id);
       if (!match || JSON.stringify(match) !== JSON.stringify(item)) {
         try {
           await setDoc(doc(db, 'ingredients', item.id), item);
         } catch (err) {
-          handleFirestoreError(err, OperationType.WRITE, `ingredients/${item.id}`);
+          console.warn('Firestore fallback sync - Write ingredient failed:', err);
         }
       }
     }
@@ -482,26 +478,50 @@ export default function App() {
       localStorage.removeItem('spirit_alchemist_manually_cleared_ingredients');
       localStorage.removeItem('spirit_alchemist_manually_cleared_recipes');
 
+      // OPTIMISTIC LOCAL RESTORE
+      setIngredients(INITIAL_INGREDIENTS);
+      setRecipes(INITIAL_RECIPES);
+      localStorage.setItem('spirit_alchemist_ingredients', JSON.stringify(INITIAL_INGREDIENTS));
+      localStorage.setItem('spirit_alchemist_recipes', JSON.stringify(INITIAL_RECIPES));
+      localStorage.setItem('cobarra_recipes', JSON.stringify(INITIAL_RECIPES));
+
+      alert('¡Base de datos demo restablecida con éxito!');
+
+      // Synchronize to Firestore in backgound
       for (const ing of INITIAL_INGREDIENTS) {
-        await setDoc(doc(db, 'ingredients', ing.id), ing);
+        try {
+          await setDoc(doc(db, 'ingredients', ing.id), ing);
+        } catch (e) {
+          console.warn('Firestore demo seed failed:', e);
+        }
       }
       for (const rec of INITIAL_RECIPES) {
-        await setDoc(doc(db, 'recipes', rec.id), rec);
+        try {
+          await setDoc(doc(db, 'recipes', rec.id), rec);
+        } catch (e) {
+          console.warn('Firestore demo seed failed:', e);
+        }
       }
-      alert('¡Base de datos demo restablecida con éxito!');
     } catch (e) {
       console.error(e);
-      alert('Error al restablecer los datos demo.');
+      alert('Error al restableces los datos de forma local.');
     }
   };
 
   // Handle specific recipe changes or new version commits
   const handleUpdateRecipe = async (updated: Recipe) => {
     if (!currentUser) return;
+
+    // OPTIMISTIC LOCAL STATE UPDATE
+    const updatedRecipes = recipes.map((r) => (r.id === updated.id ? updated : r));
+    setRecipes(updatedRecipes);
+    localStorage.setItem('spirit_alchemist_recipes', JSON.stringify(updatedRecipes));
+    localStorage.setItem('cobarra_recipes', JSON.stringify(updatedRecipes));
+
     try {
       await setDoc(doc(db, 'recipes', updated.id), updated);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `recipes/${updated.id}`);
+      console.warn('Firestore fallback sync - Write recipe failed:', err);
     }
   };
 
@@ -750,21 +770,29 @@ export default function App() {
       ],
     };
 
+    // OPTIMISTIC LOCAL STATE UPDATE
+    const updatedRecipes = [...recipes, newRecipeObj];
+    setRecipes(updatedRecipes);
+    localStorage.setItem('spirit_alchemist_recipes', JSON.stringify(updatedRecipes));
+    localStorage.setItem('cobarra_recipes', JSON.stringify(updatedRecipes));
+
+    setSelectedRecipeId(newRecipeId);
+    setActiveCatalogMode(false);
+    setShowAddRecipeModal(false);
+
+    // Reset fields
+    setNewRecipeName('');
+    setNewRecipeDesc('');
+    setNewRecipeType('bebida');
+    setNewRecipeYieldVal(300);
+    setNewRecipeYieldUnit('ml');
+    setInitialIngredientsSelection([]);
+
+    // BG SYNC
     try {
       await setDoc(doc(db, 'recipes', newRecipeId), newRecipeObj);
-      setSelectedRecipeId(newRecipeId);
-      setActiveCatalogMode(false);
-      setShowAddRecipeModal(false);
-
-      // Reset fields
-      setNewRecipeName('');
-      setNewRecipeDesc('');
-      setNewRecipeType('bebida');
-      setNewRecipeYieldVal(300);
-      setNewRecipeYieldUnit('ml');
-      setInitialIngredientsSelection([]);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `recipes/${newRecipeId}`);
+      console.warn('Firestore fallback sync - Write state failed:', err);
     }
   };
 
@@ -772,17 +800,26 @@ export default function App() {
 
   const confirmDeleteRecipe = async () => {
     if (recipeToDelete) {
+      const remainingRecipes = recipes.filter((r) => r.id !== recipeToDelete.id);
+
+      // OPTIMISTIC LOCAL STATE UPDATE
+      setRecipes(remainingRecipes);
+      localStorage.setItem('spirit_alchemist_recipes', JSON.stringify(remainingRecipes));
+      localStorage.setItem('cobarra_recipes', JSON.stringify(remainingRecipes));
+
+      if (selectedRecipeId === recipeToDelete.id) {
+        setSelectedRecipeId(null);
+      }
+      setRecipeToDelete(null);
+
+      // BG SYNC
       try {
         if (recipes.length === 1) {
           localStorage.setItem('spirit_alchemist_manually_cleared_recipes', 'true');
         }
         await deleteDoc(doc(db, 'recipes', recipeToDelete.id));
-        if (selectedRecipeId === recipeToDelete.id) {
-          setSelectedRecipeId(null);
-        }
-        setRecipeToDelete(null);
       } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `recipes/${recipeToDelete.id}`);
+        console.warn('Firestore fallback sync - Delete recipe failed:', err);
       }
     }
   };
