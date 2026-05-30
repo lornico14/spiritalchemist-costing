@@ -23,7 +23,8 @@
         "baseUnit": { "type": "string" },
         "density": { "type": "number" },
         "category": { "type": "string" },
-        "tenantId": { "type": "string" }
+        "tenantId": { "type": "string" },
+        "sku": { "type": "string" }
       },
       "required": ["id", "name", "baseCost", "baseQuantity", "baseUnit", "tenantId"]
     },

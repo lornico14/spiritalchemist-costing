@@ -28,6 +28,10 @@ export default function IngredientCatalog({
   const [selectedTenantFilter, setSelectedTenantFilter] = useState<string>('all');
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // Selection states for bulk action
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [ingredientsToBulkDelete, setIngredientsToBulkDelete] = useState<MasterIngredient[] | null>(null);
+
   // Bulk Edit / Spreadsheet Mode state
   const [isBulkEdit, setIsBulkEdit] = useState(false);
   const [bulkIngredients, setBulkIngredients] = useState<MasterIngredient[]>([]);
@@ -90,18 +94,19 @@ export default function IngredientCatalog({
     }
 
     const updated = ingredients.map((ing) => {
-      if (ing.id === id) {
-        return {
-          ...ing,
-          name: editForm.name || ing.name,
-          baseCost: Number(editForm.baseCost) || ing.baseCost,
-          baseQuantity: Number(editForm.baseQuantity) || ing.baseQuantity,
-          baseUnit: (editForm.baseUnit as MeasurementUnit) || ing.baseUnit,
-          density: Number(editForm.density) || ing.density || 1.0,
-          category: editForm.category || ing.category || 'Others',
-        } as MasterIngredient;
-      }
-      return ing;
+       if (ing.id === id) {
+         return {
+           ...ing,
+           name: editForm.name || ing.name,
+           baseCost: Number(editForm.baseCost) || ing.baseCost,
+           baseQuantity: Number(editForm.baseQuantity) || ing.baseQuantity,
+           baseUnit: (editForm.baseUnit as MeasurementUnit) || ing.baseUnit,
+           density: Number(editForm.density) || ing.density || 1.0,
+           category: editForm.category || ing.category || 'Others',
+           sku: editForm.sku || '',
+         } as MasterIngredient;
+       }
+       return ing;
     });
 
     onUpdateIngredients(updated);
@@ -126,6 +131,7 @@ export default function IngredientCatalog({
       density: Number(editForm.density) || 1.0,
       category: editForm.category || 'Others',
       tenantId: tenantId,
+      sku: editForm.sku || '',
     };
 
     onUpdateIngredients([...ingredients, newIng]);
@@ -305,6 +311,17 @@ export default function IngredientCatalog({
             </div>
 
             <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Product SKU (e.g. LIQ-ABS-750)</label>
+              <input
+                type="text"
+                placeholder="e.g., SKU-12345"
+                value={editForm.sku || ''}
+                onChange={(e) => setEditForm({ ...editForm, sku: e.target.value })}
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">Commercial Pack Cost ($ USD) <span className="text-red-500">*</span></label>
               <input
                 type="number"
@@ -455,6 +472,39 @@ export default function IngredientCatalog({
         </div>
       </div>
 
+      {selectedIds.size > 0 && (
+        <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-fadeIn">
+          <div className="space-y-1 text-center sm:text-left">
+            <h4 className="font-extrabold text-rose-900 text-sm">Bulk Actions Available</h4>
+            <p className="text-rose-700 text-xs">
+              You have selected {selectedIds.size} {selectedIds.size === 1 ? 'ingredient' : 'ingredients'}. You can delete them in a single batch operation.
+            </p>
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="px-3.5 py-1.5 border border-rose-200 bg-white hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl shadow-sm transition cursor-pointer"
+            >
+              Clear Selection
+            </button>
+            <button
+              onClick={() => {
+                const selectedIngredients = ingredients.filter(i => selectedIds.has(i.id));
+                const holdsGlobal = selectedIngredients.some(i => i.tenantId === 'global' && currentUser?.role === 'client');
+                if (holdsGlobal) {
+                  alert('Selection contains corporate global ingredients. Clients are not allowed to delete global ingredients.');
+                  return;
+                }
+                setIngredientsToBulkDelete(selectedIngredients);
+              }}
+              className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-sm transition cursor-pointer"
+            >
+              Delete Selected ({selectedIds.size})
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Bulk spreadsheet edit or standard grid */}
       {isBulkEdit ? (
         <div className="space-y-4">
@@ -470,6 +520,7 @@ export default function IngredientCatalog({
               <thead>
                 <tr className="bg-amber-50/50 text-slate-600 text-xs font-semibold border-b border-amber-100">
                   <th className="px-4 py-3">Commercial Name</th>
+                  <th className="px-3 py-3">SKU</th>
                   <th className="px-3 py-3">Category</th>
                   <th className="px-3 py-3">Pack Cost ($ USD)</th>
                   <th className="px-3 py-3">Pack Pack Size</th>
@@ -498,6 +549,19 @@ export default function IngredientCatalog({
                            disabled={isReadonly}
                            onChange={(e) => handleBulkChange(bIng.id, 'name', e.target.value)}
                            className={`w-full px-2 py-1 border rounded-lg text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none ${
+                             isReadonly ? 'bg-slate-100 text-slate-400 border-slate-200' : 'border-slate-200 bg-white'
+                           }`}
+                        />
+                      </td>
+
+                      <td className="px-3 py-2">
+                        <input
+                           type="text"
+                           value={bIng.sku || ''}
+                           placeholder="No SKU"
+                           disabled={isReadonly}
+                           onChange={(e) => handleBulkChange(bIng.id, 'sku', e.target.value)}
+                           className={`w-28 px-2 py-1 border rounded-lg text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none ${
                              isReadonly ? 'bg-slate-100 text-slate-400 border-slate-200' : 'border-slate-200 bg-white'
                            }`}
                         />
@@ -616,7 +680,26 @@ export default function IngredientCatalog({
           <table className="w-full min-w-[700px] text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 text-slate-500 text-xs font-semibold border-b border-slate-100">
-                <th className="px-5 py-3 col-span-2">Commercial Ingredient</th>
+                <th className="pl-5 pr-2 py-3 w-12 text-center">
+                  <input
+                    type="checkbox"
+                    checked={filteredIngredients.length > 0 && filteredIngredients.every(ing => selectedIds.has(ing.id))}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        const ids = new Set(selectedIds);
+                        filteredIngredients.forEach(ing => ids.add(ing.id));
+                        setSelectedIds(ids);
+                      } else {
+                        const ids = new Set(selectedIds);
+                        filteredIngredients.forEach(ing => ids.delete(ing.id));
+                        setSelectedIds(ids);
+                      }
+                    }}
+                    className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer h-4 w-4"
+                  />
+                </th>
+                <th className="px-4 py-3">Commercial Ingredient</th>
+                <th className="px-4 py-3">SKU</th>
                 <th className="px-4 py-3">Category</th>
                 <th className="px-4 py-3">Base Pack Size</th>
                 <th className="px-4 py-3">Pack Cost</th>
@@ -630,7 +713,7 @@ export default function IngredientCatalog({
             <tbody className="divide-y divide-slate-100 text-sm">
               {filteredIngredients.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-10 text-center text-slate-400 text-sm">
+                  <td colSpan={8} className="px-5 py-10 text-center text-slate-400 text-sm">
                     No commercial ingredients found with this search.
                   </td>
                 </tr>
@@ -646,7 +729,24 @@ export default function IngredientCatalog({
                         isEditing ? 'bg-indigo-50/20' : ''
                       }`}
                     >
-                      <td className="px-5 py-3.5">
+                      <td className="pl-5 pr-2 py-3.5 w-12 text-center">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(ing.id)}
+                          onChange={(e) => {
+                            const ids = new Set(selectedIds);
+                            if (e.target.checked) {
+                              ids.add(ing.id);
+                            } else {
+                              ids.delete(ing.id);
+                            }
+                            setSelectedIds(ids);
+                          }}
+                          className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer h-4 w-4"
+                        />
+                      </td>
+
+                      <td className="px-4 py-3.5">
                         {isEditing ? (
                           <input
                             type="text"
@@ -670,6 +770,26 @@ export default function IngredientCatalog({
                               )}
                             </div>
                           </div>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3.5">
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            placeholder="SKU-12345"
+                            value={editForm.sku || ''}
+                            onChange={(e) => setEditForm({ ...editForm, sku: e.target.value })}
+                            className="w-28 px-2 py-1.5 border border-indigo-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          />
+                        ) : (
+                          ing.sku ? (
+                            <span className="font-mono text-xs px-2 py-1 rounded bg-slate-100 text-slate-700">
+                              {ing.sku}
+                            </span>
+                          ) : (
+                            <span className="font-mono text-xs text-slate-400 italic">No SKU</span>
+                          )
                         )}
                       </td>
 
@@ -860,6 +980,62 @@ export default function IngredientCatalog({
                 className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-sm cursor-pointer transition"
               >
                 Confirm Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom React-Based Bulk Delete Ingredient Confirmation Modal */}
+      {ingredientsToBulkDelete && (
+        <div className="fixed inset-0 bg-slate-950/60 flex items-center justify-center p-4 z-50 animate-fadeIn animate-duration-150" id="bulk-delete-ingredient-modal">
+          <div className="bg-white rounded-3xl p-6 shadow-2xl border border-slate-100 max-w-md w-full space-y-5 text-left transform transition-all duration-200 scale-100">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="p-2 bg-rose-50 rounded-xl font-sans inline-flex">
+                <AlertCircle className="h-6 w-6" />
+              </div>
+              <h3 className="font-extrabold text-slate-900 text-sm uppercase tracking-tight">
+                Bulk Delete Ingredients?
+              </h3>
+            </div>
+            
+            <p className="text-slate-500 text-xs leading-normal font-sans">
+              Are you sure you want to delete <strong className="text-rose-700">{ingredientsToBulkDelete.length}</strong> selected ingredients?
+            </p>
+
+            <div className="max-h-40 overflow-y-auto border border-slate-100 rounded-xl p-3 bg-slate-50 space-y-1">
+              {ingredientsToBulkDelete.map(i => (
+                <div key={i.id} className="text-xs text-slate-600 flex items-center justify-between">
+                  <span className="font-medium">{i.name}</span>
+                  {i.sku && <span className="font-mono text-[10px] text-slate-400">({i.sku})</span>}
+                </div>
+              ))}
+            </div>
+
+            <p className="text-slate-500 text-xs leading-normal font-sans italic">
+              This action cannot be undone and will affect any recipes that contain these items in their formulations.
+            </p>
+
+            <div className="flex gap-2 justify-end pt-3 border-t border-slate-100 font-sans">
+              <button
+                type="button"
+                onClick={() => setIngredientsToBulkDelete(null)}
+                className="px-4 py-1.5 border border-slate-250 hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl cursor-pointer transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const idsToDelete = new Set(ingredientsToBulkDelete.map(i => i.id));
+                  const updated = ingredients.filter((item) => !idsToDelete.has(item.id));
+                  onUpdateIngredients(updated);
+                  setSelectedIds(new Set());
+                  setIngredientsToBulkDelete(null);
+                }}
+                className="px-4 py-1.5 bg-rose-600 hover:bg-rose-750 text-white font-bold text-xs rounded-xl shadow-sm cursor-pointer transition"
+              >
+                Confirm Bulk Delete
               </button>
             </div>
           </div>

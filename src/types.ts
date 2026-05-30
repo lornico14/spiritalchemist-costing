@@ -33,6 +33,7 @@ export interface MasterIngredient {
   density: number;        // g/ml (used when converting weight to volume, default 1.0)
   category: string;       // e.g., 'Licores', 'Siropos', 'Frutas', 'Otros'
   tenantId: string;       // Owner tenant, or 'global'
+  sku?: string;           // Optional product SKU
 }
 
 export interface RecipeIngredient {
