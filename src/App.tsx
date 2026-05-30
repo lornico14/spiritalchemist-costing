@@ -6,8 +6,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Recipe, MasterIngredient, RecipeVersion, YieldUnit, RecipeIngredient, User, Tenant } from './types';
 import { INITIAL_INGREDIENTS, INITIAL_RECIPES } from './data/initialData';
-import { auth, googleSignIn, logout as firebaseLogout } from './lib/firebase';
+import { auth, googleSignIn, logout as firebaseLogout, db, handleFirestoreError, OperationType } from './lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
+import { collection, doc, setDoc, deleteDoc, query, where, onSnapshot } from 'firebase/firestore';
 import { calculateIngredientCost, calculateVersionCostWithSubrecipes, getRecipeTotalCost } from './utils/conversions';
 import IngredientCatalog from './components/IngredientCatalog';
 import RecipeCostingWorkspace from './components/RecipeCostingWorkspace';
@@ -303,7 +304,7 @@ export default function App() {
 
   // Handle Firebase Auth Persistence & State Sync
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         const email = firebaseUser.email || '';
         const name = firebaseUser.displayName || email.split('@')[0];
@@ -339,21 +340,135 @@ export default function App() {
         if (tenantId !== 'global') {
           registerTenantIfNeeded(tenantId, tenantName);
         }
+
+        // Maintain secure references in Firestore
+        try {
+          await setDoc(doc(db, 'users', firebaseUser.uid), appUser);
+        } catch (e) {
+          console.error('Error syncing user profile to Firestore:', e);
+        }
+
         setCurrentUser(appUser);
       }
     });
     return () => unsubscribe();
   }, [usersList, tenants]);
 
+  // --- REAL-TIME FIRESTORE SYNCHRONIZATION EFFECT ---
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let qIng;
+    let qRec;
+
+    if (currentUser.role === 'superadmin') {
+      qIng = collection(db, 'ingredients');
+      qRec = collection(db, 'recipes');
+    } else {
+      qIng = query(
+        collection(db, 'ingredients'),
+        where('tenantId', 'in', [currentUser.tenantId, 'global'])
+      );
+      qRec = query(
+        collection(db, 'recipes'),
+        where('tenantId', 'in', [currentUser.tenantId, 'global'])
+      );
+    }
+
+    const unsubIng = onSnapshot(qIng, (snapshot) => {
+      const list: MasterIngredient[] = [];
+      snapshot.forEach((doc) => {
+        list.push(doc.data() as MasterIngredient);
+      });
+      setIngredients(list);
+
+      // Seed if empty and superadmin is logged in
+      if (list.length === 0 && currentUser.role === 'superadmin') {
+        INITIAL_INGREDIENTS.forEach(async (ing) => {
+          try {
+            await setDoc(doc(db, 'ingredients', ing.id), ing);
+          } catch (e) {
+            console.error('Seed ingredient fails:', e);
+          }
+        });
+      }
+    }, (error) => {
+      if (error.message && error.message.includes('permission')) {
+        handleFirestoreError(error, OperationType.LIST, 'ingredients');
+      } else {
+        console.error('Ingredients subscription error:', error);
+      }
+    });
+
+    const unsubRec = onSnapshot(qRec, (snapshot) => {
+      const list: Recipe[] = [];
+      snapshot.forEach((doc) => {
+        list.push(doc.data() as Recipe);
+      });
+      setRecipes(list);
+
+      // Seed if empty and superadmin is logged in
+      if (list.length === 0 && currentUser.role === 'superadmin') {
+        INITIAL_RECIPES.forEach(async (rec) => {
+          try {
+            await setDoc(doc(db, 'recipes', rec.id), rec);
+          } catch (e) {
+            console.error('Seed recipe fails:', e);
+          }
+        });
+      }
+    }, (error) => {
+      if (error.message && error.message.includes('permission')) {
+        handleFirestoreError(error, OperationType.LIST, 'recipes');
+      } else {
+        console.error('Recipes subscription error:', error);
+      }
+    });
+
+    return () => {
+      unsubIng();
+      unsubRec();
+    };
+  }, [currentUser]);
+
   // Handle ingredient catalog updates (globally recalculated)
-  const handleUpdateIngredients = (updated: MasterIngredient[]) => {
-    setIngredients(updated);
+  const handleUpdateIngredients = async (updated: MasterIngredient[]) => {
+    if (!currentUser) return;
+
+    // Direct delta syncing to Firestore
+    const updatedIds = new Set(updated.map((i) => i.id));
+    const deleted = ingredients.filter((i) => !updatedIds.has(i.id));
+
+    // Handle deletions
+    for (const item of deleted) {
+      try {
+        await deleteDoc(doc(db, 'ingredients', item.id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `ingredients/${item.id}`);
+      }
+    }
+
+    // Handle creations / modifications
+    for (const item of updated) {
+      const match = ingredients.find((i) => i.id === item.id);
+      if (!match || JSON.stringify(match) !== JSON.stringify(item)) {
+        try {
+          await setDoc(doc(db, 'ingredients', item.id), item);
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, `ingredients/${item.id}`);
+        }
+      }
+    }
   };
 
   // Handle specific recipe changes or new version commits
-  const handleUpdateRecipe = (updated: Recipe) => {
-    const updatedRecipes = recipes.map((r) => (r.id === updated.id ? updated : r));
-    setRecipes(updatedRecipes);
+  const handleUpdateRecipe = async (updated: Recipe) => {
+    if (!currentUser) return;
+    try {
+      await setDoc(doc(db, 'recipes', updated.id), updated);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `recipes/${updated.id}`);
+    }
   };
 
   // Find currently active chosen recipe
@@ -558,7 +673,7 @@ export default function App() {
   };
 
   // Create recipe callback triggered in modal
-  const handleAddNewRecipe = (e: React.FormEvent) => {
+  const handleAddNewRecipe = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
     if (!newRecipeName.trim()) {
@@ -601,30 +716,37 @@ export default function App() {
       ],
     };
 
-    setRecipes([newRecipeObj, ...recipes]);
-    setSelectedRecipeId(newRecipeId);
-    setActiveCatalogMode(false);
-    setShowAddRecipeModal(false);
+    try {
+      await setDoc(doc(db, 'recipes', newRecipeId), newRecipeObj);
+      setSelectedRecipeId(newRecipeId);
+      setActiveCatalogMode(false);
+      setShowAddRecipeModal(false);
 
-    // Reset fields
-    setNewRecipeName('');
-    setNewRecipeDesc('');
-    setNewRecipeType('bebida');
-    setNewRecipeYieldVal(300);
-    setNewRecipeYieldUnit('ml');
-    setInitialIngredientsSelection([]);
+      // Reset fields
+      setNewRecipeName('');
+      setNewRecipeDesc('');
+      setNewRecipeType('bebida');
+      setNewRecipeYieldVal(300);
+      setNewRecipeYieldUnit('ml');
+      setInitialIngredientsSelection([]);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `recipes/${newRecipeId}`);
+    }
   };
 
   const [recipeToDelete, setRecipeToDelete] = useState<{ id: string; name: string } | null>(null);
 
-  const confirmDeleteRecipe = () => {
+  const confirmDeleteRecipe = async () => {
     if (recipeToDelete) {
-      const remaining = recipes.filter((r) => r.id !== recipeToDelete.id);
-      setRecipes(remaining);
-      if (selectedRecipeId === recipeToDelete.id) {
-        setSelectedRecipeId(null);
+      try {
+        await deleteDoc(doc(db, 'recipes', recipeToDelete.id));
+        if (selectedRecipeId === recipeToDelete.id) {
+          setSelectedRecipeId(null);
+        }
+        setRecipeToDelete(null);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `recipes/${recipeToDelete.id}`);
       }
-      setRecipeToDelete(null);
     }
   };
 

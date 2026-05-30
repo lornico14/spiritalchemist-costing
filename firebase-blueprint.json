@@ -1,0 +1,60 @@
+{
+  "entities": {
+    "Tenant": {
+      "title": "Tenant",
+      "description": "A tenant representing a specific bar or venue.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "contactEmail": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "MasterIngredient": {
+      "title": "MasterIngredient",
+      "description": "An ingredient defined globally or specific to a tenant.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "baseCost": { "type": "number" },
+        "baseQuantity": { "type": "number" },
+        "baseUnit": { "type": "string" },
+        "density": { "type": "number" },
+        "category": { "type": "string" },
+        "tenantId": { "type": "string" }
+      },
+      "required": ["id", "name", "baseCost", "baseQuantity", "baseUnit", "tenantId"]
+    },
+    "Recipe": {
+      "title": "Recipe",
+      "description": "A recipe versioned collection belonging to a tenant or global.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "type": { "type": "string", "enum": ["bebida", "sub_receta"] },
+        "currentVersion": { "type": "number" },
+        "versions": { "type": "array" },
+        "tenantId": { "type": "string" }
+      },
+      "required": ["id", "name", "type", "currentVersion", "tenantId", "versions"]
+    }
+  },
+  "firestore": {
+    "tenants/{tenantId}": {
+      "schema": "Tenant",
+      "description": "Tenants collection storing venue metadata"
+    },
+    "ingredients/{ingredientId}": {
+      "schema": "MasterIngredient",
+      "description": "Ingredients with specific costs and densities"
+    },
+    "recipes/{recipeId}": {
+      "schema": "Recipe",
+      "description": "Technical cocktail recipes and version histories"
+    }
+  }
+}

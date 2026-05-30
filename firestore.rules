@@ -1,0 +1,155 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Helper Functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdminEmail() {
+      return isSignedIn() && (
+        request.auth.token.email == "nikolaslorenzo@gmail.com" ||
+        request.auth.token.email == "nico@spiritalchemistllc.com" ||
+        request.auth.token.email == "admin@beveragecosting.com"
+      );
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        isSuperAdminEmail() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == "superadmin")
+      );
+    }
+
+    function getUserTenantId() {
+      return getUserData().tenantId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // 3. User entities validation
+    function isValidUser(usr) {
+      return usr.id is string && usr.id.size() <= 128
+        && usr.email is string && usr.email.size() <= 200
+        && usr.name is string && usr.name.size() <= 200
+        && usr.role in ["superadmin", "client"]
+        && usr.tenantId is string;
+    }
+
+    // 4. Ingredient Schema Validation
+    function isValidIngredient(ing) {
+      return ing.id is string && ing.id.size() <= 128
+        && ing.name is string && ing.name.size() <= 200 && ing.name.size() > 0
+        && ing.baseCost is number && ing.baseCost >= 0
+        && ing.baseQuantity is number && ing.baseQuantity > 0
+        && ing.baseUnit is string
+        && ing.tenantId is string;
+    }
+
+    // 5. Recipe Schema Validation
+    function isValidRecipe(rec) {
+      return rec.id is string && rec.id.size() <= 128
+        && rec.name is string && rec.name.size() <= 200 && rec.name.size() > 0
+        && rec.type in ["bebida", "sub_receta"]
+        && rec.currentVersion is number
+        && rec.tenantId is string
+        && rec.versions is list;
+    }
+
+    // --- MATCH BLOCKS ---
+
+    // USERS COLLECTION
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+      allow create, update: if isSignedIn() && request.auth.uid == userId 
+        && isValidUser(incoming())
+        && (
+          (incoming().role == "superadmin" && isSuperAdminEmail()) ||
+          (incoming().role == "client")
+        );
+      allow delete: if isSuperAdmin();
+    }
+
+    // INGREDIENTS COLLECTION
+    match /ingredients/{ingredientId} {
+      allow get: if isSignedIn() && (
+        isSuperAdmin() || 
+        existing().tenantId == "global" || 
+        existing().tenantId == getUserTenantId()
+      );
+      allow list: if isSignedIn() && (
+        isSuperAdmin() || 
+        resource.data.tenantId == "global" || 
+        resource.data.tenantId == getUserTenantId()
+      );
+      allow create: if isSignedIn() && isValidId(ingredientId) && isValidIngredient(incoming()) && (
+        isSuperAdmin() || 
+        (incoming().tenantId == getUserTenantId() && incoming().tenantId != "global")
+      );
+      allow update: if isSignedIn() && isValidId(ingredientId) && isValidIngredient(incoming()) && (
+        isSuperAdmin() || (
+          existing().tenantId == getUserTenantId() && 
+          incoming().tenantId == getUserTenantId() && 
+          existing().tenantId != "global"
+        )
+      );
+      allow delete: if isSignedIn() && (
+        isSuperAdmin() || (
+          existing().tenantId == getUserTenantId() && 
+          existing().tenantId != "global"
+        )
+      );
+    }
+
+    // RECIPES COLLECTION
+    match /recipes/{recipeId} {
+      allow get: if isSignedIn() && (
+        isSuperAdmin() || 
+        existing().tenantId == "global" || 
+        existing().tenantId == getUserTenantId()
+      );
+      allow list: if isSignedIn() && (
+        isSuperAdmin() || 
+        resource.data.tenantId == "global" || 
+        resource.data.tenantId == getUserTenantId()
+      );
+      allow create: if isSignedIn() && isValidId(recipeId) && isValidRecipe(incoming()) && (
+        isSuperAdmin() || 
+        (incoming().tenantId == getUserTenantId() && incoming().tenantId != "global")
+      );
+      allow update: if isSignedIn() && isValidId(recipeId) && isValidRecipe(incoming()) && (
+        isSuperAdmin() || (
+          existing().tenantId == getUserTenantId() && 
+          incoming().tenantId == getUserTenantId() && 
+          existing().tenantId != "global"
+        )
+      );
+      allow delete: if isSignedIn() && (
+        isSuperAdmin() || (
+          existing().tenantId == getUserTenantId() && 
+          existing().tenantId != "global"
+        )
+      );
+    }
+  }
+}
