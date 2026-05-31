@@ -64,7 +64,8 @@ service cloud.firestore {
         && ing.baseQuantity is number && ing.baseQuantity > 0
         && ing.baseUnit is string
         && ing.tenantId is string
-        && (!('sku' in ing) || (ing.sku is string && ing.sku.size() <= 100));
+        && (!('sku' in ing) || (ing.sku is string && ing.sku.size() <= 100))
+        && (!('productUrl' in ing) || (ing.productUrl is string && ing.productUrl.size() <= 1000));
     }
 
     // 5. Recipe Schema Validation

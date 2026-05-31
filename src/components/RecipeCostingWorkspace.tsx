@@ -157,12 +157,19 @@ export default function RecipeCostingWorkspace({
       return;
     }
     const defaultChoice = selectorChoices[0];
+    let defaultUnit: MeasurementUnit = 'ml';
+    if (!defaultChoice.isSubRecipe) {
+      const master = masterIngredients.find((m) => m.id === defaultChoice.id);
+      if (master && (master.baseUnit === 'each' || master.baseUnit === 'u')) {
+        defaultUnit = master.baseUnit;
+      }
+    }
     const newRow: RecipeIngredient = {
       id: `draft-row-${Date.now()}-${Math.random()}`,
       ingredientId: defaultChoice.id,
       isSubRecipe: defaultChoice.isSubRecipe,
       quantity: 10,
-      unit: 'ml',
+      unit: defaultUnit,
     };
     setEditIngredients([...editIngredients, newRow]);
   };
@@ -181,6 +188,12 @@ export default function RecipeCostingWorkspace({
             const match = selectorChoices.find((c) => c.id === fields.ingredientId);
             if (match) {
               updatedRow.isSubRecipe = match.isSubRecipe;
+              if (!match.isSubRecipe) {
+                const master = masterIngredients.find((m) => m.id === fields.ingredientId);
+                if (master && (master.baseUnit === 'each' || master.baseUnit === 'u')) {
+                  updatedRow.unit = master.baseUnit;
+                }
+              }
             }
           }
           return updatedRow;
@@ -670,6 +683,8 @@ export default function RecipeCostingWorkspace({
                                   <option value="kg">kg</option>
                                   <option value="lb">lb</option>
                                   <option value="l">L</option>
+                                  <option value="each">each</option>
+                                  <option value="u">u</option>
                                 </select>
                               </div>
                             ) : (

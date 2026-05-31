@@ -5,7 +5,8 @@
 
 export type WeightUnit = 'g' | 'kg' | 'lb' | 'oz';
 export type VolumeUnit = 'ml' | 'l' | 'fl_oz';
-export type MeasurementUnit = WeightUnit | VolumeUnit;
+export type CountableUnit = 'each' | 'u';
+export type MeasurementUnit = WeightUnit | VolumeUnit | CountableUnit;
 
 // Yield units for the final recipe output
 export type YieldUnit = 'ml' | 'oz' | 'fl_oz' | 'g' | 'porciones' | 'botellas' | 'batch';
@@ -34,6 +35,7 @@ export interface MasterIngredient {
   category: string;       // e.g., 'Licores', 'Siropos', 'Frutas', 'Otros'
   tenantId: string;       // Owner tenant, or 'global'
   sku?: string;           // Optional product SKU
+  productUrl?: string;    // Optional product link / URL
 }
 
 export interface RecipeIngredient {

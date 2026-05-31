@@ -28,6 +28,10 @@ export function isVolumeUnit(unit: MeasurementUnit): boolean {
   return unit in volumeFactors;
 }
 
+export function isCountableUnit(unit: MeasurementUnit): boolean {
+  return unit === 'each' || unit === 'u';
+}
+
 /**
  * Calculates absolute cost per gram and cost per milliliter of a master ingredient,
  * taking its density into account if conversion between weight and volume is needed.
@@ -61,6 +65,12 @@ export function getIngredientUnitCosts(ingredient: MasterIngredient): { costPerG
  */
 export function calculateIngredientCost(ingredient: MasterIngredient, qty: number, unit: MeasurementUnit): number {
   if (qty <= 0) return 0;
+  if (isCountableUnit(unit) || isCountableUnit(ingredient.baseUnit)) {
+    if (ingredient.baseQuantity > 0) {
+      return qty * (ingredient.baseCost / ingredient.baseQuantity);
+    }
+    return 0;
+  }
   const { costPerG, costPerMl } = getIngredientUnitCosts(ingredient);
 
   if (isWeightUnit(unit)) {
@@ -78,6 +88,9 @@ export function calculateIngredientCost(ingredient: MasterIngredient, qty: numbe
  * Normalizes a dynamic measurement to standard output value in ml or g for summary
  */
 export function getNormalizedQuantity(qty: number, unit: MeasurementUnit, density: number = 1.0): { value: number; label: string } {
+  if (isCountableUnit(unit)) {
+    return { value: qty, label: `${qty} ${unit}` };
+  }
   if (isWeightUnit(unit)) {
     const value = qty * (weightFactors[unit] || 1);
     return { value, label: `${value.toFixed(1)} g` };
