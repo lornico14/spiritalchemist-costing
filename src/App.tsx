@@ -7,7 +7,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Recipe, MasterIngredient, RecipeVersion, YieldUnit, RecipeIngredient, User, Tenant } from './types';
 import { INITIAL_INGREDIENTS, INITIAL_RECIPES } from './data/initialData';
 import { auth, googleSignIn, logout as firebaseLogout, db } from './lib/firebase';
-import { onAuthStateChanged } from 'firebase/auth';
+import { onAuthStateChanged, signInAnonymously } from 'firebase/auth';
 import { collection, doc, setDoc, deleteDoc, query, where, onSnapshot } from 'firebase/firestore';
 import { calculateIngredientCost, calculateVersionCostWithSubrecipes, getRecipeTotalCost } from './utils/conversions';
 import IngredientCatalog from './components/IngredientCatalog';
@@ -140,48 +140,64 @@ export default function App() {
     return MOCK_USERS;
   });
 
-  const prevUsersListRef = React.useRef<{ email: string; pass: string; user: User }[]>([]);
-
   useEffect(() => {
     localStorage.setItem('spirit_alchemist_custom_users', JSON.stringify(usersList));
     localStorage.setItem('cobarra_custom_users', JSON.stringify(usersList)); // backwards-compatible syncer
+  }, [usersList]);
 
-    // Detect and sync deletions to Firestore
-    const prevList = prevUsersListRef.current;
-    if (prevList && prevList.length > 0) {
-      const currentEmails = new Set(usersList.map((u) => u.email.toLowerCase()));
-      prevList.forEach(async (prevItem) => {
-        const isMock = MOCK_USERS.some(
-          (m) => m.email.toLowerCase() === prevItem.email.toLowerCase() && m.pass === prevItem.pass
-        );
-        if (!isMock && !currentEmails.has(prevItem.email.toLowerCase())) {
-          try {
-            await deleteDoc(doc(db, 'custom_users', prevItem.email.toLowerCase().trim()));
-          } catch (e) {
-            console.warn('Firestore deletion sync failed for:', prevItem.email, e);
-          }
-        }
-      });
+  // Direct Firestore-first change interceptor handler for user account operations
+  const handleUsersListChange = async (valueOrAction: any) => {
+    let updatedList: { email: string; pass: string; user: User }[];
+    if (typeof valueOrAction === 'function') {
+      updatedList = valueOrAction(usersList);
+    } else {
+      updatedList = valueOrAction;
     }
-    prevUsersListRef.current = usersList;
 
-    // Detect and sync additions/updates to Firestore
-    const syncToFirestore = async () => {
-      for (const item of usersList) {
-        const isMock = MOCK_USERS.some(
-          (m) => m.email.toLowerCase() === item.email.toLowerCase() && m.pass === item.pass
-        );
-        if (!isMock) {
-          try {
-            await setDoc(doc(db, 'custom_users', item.email.toLowerCase().trim()), item);
-          } catch (e) {
-            console.warn('Sync custom user to Firestore failed:', item.email, e);
-          }
+    // Detect actual database operations to Firestore
+    const oldMap = new Map<string, { email: string; pass: string; user: User }>(
+      usersList.map((u) => [u.email.toLowerCase(), u])
+    );
+    const newMap = new Map<string, { email: string; pass: string; user: User }>(
+      updatedList.map((u) => [u.email.toLowerCase(), u])
+    );
+
+    // 1. Process Deletions: Users in current list but missing in updated list
+    for (const item of usersList) {
+      if (!newMap.has(item.email.toLowerCase())) {
+        try {
+          const docRef = doc(db, 'custom_users', item.email.toLowerCase().trim());
+          await deleteDoc(docRef);
+        } catch (e) {
+          console.error(`Firestore deletion failed for user ${item.email}:`, e);
         }
       }
-    };
-    syncToFirestore();
-  }, [usersList]);
+    }
+
+    // 2. Process Additions and Updates: Users in updated list that are new or changed
+    for (const item of updatedList) {
+      const oldItem = oldMap.get(item.email.toLowerCase());
+      const isNewOrUpdated = !oldItem || 
+        oldItem.pass !== item.pass || 
+        oldItem.user.name !== item.user.name ||
+        oldItem.user.role !== item.user.role ||
+        oldItem.user.tenantId !== item.user.tenantId;
+      
+      if (isNewOrUpdated) {
+        try {
+          const docRef = doc(db, 'custom_users', item.email.toLowerCase().trim());
+          await setDoc(docRef, item);
+        } catch (e) {
+          console.error(`Firestore setDoc failed for user ${item.email}:`, e);
+        }
+      }
+    }
+
+    // Sync local state copy and localStorage cache
+    setUsersList(updatedList);
+    localStorage.setItem('spirit_alchemist_custom_users', JSON.stringify(updatedList));
+    localStorage.setItem('cobarra_custom_users', JSON.stringify(updatedList));
+  };
 
   // --- REAL-TIME FIRESTORE CUSTOM USERS SYNCHRONIZATION ---
   useEffect(() => {
@@ -227,8 +243,52 @@ export default function App() {
       if (prev.some((t) => t.id === tId)) {
         return prev;
       }
-      return [...prev, { id: tId, name: tName }];
+      const newList = [...prev, { id: tId, name: tName }];
+      setDoc(doc(db, 'tenants', tId), { id: tId, name: tName }).catch((e) => {
+        console.warn('Silent tenant registration write failed:', e);
+      });
+      return newList;
     });
+  };
+
+  const handleTenantsChange = async (valueOrAction: any) => {
+    let updatedList: Tenant[];
+    if (typeof valueOrAction === 'function') {
+      updatedList = valueOrAction(tenants);
+    } else {
+      updatedList = valueOrAction;
+    }
+
+    const oldMap = new Map<string, Tenant>(tenants.map(t => [t.id, t]));
+    const newMap = new Map<string, Tenant>(updatedList.map(t => [t.id, t]));
+
+    // Handle deletions
+    for (const item of tenants) {
+      if (item.id !== 'global' && !newMap.has(item.id)) {
+        try {
+          await deleteDoc(doc(db, 'tenants', item.id));
+        } catch (e) {
+          console.error(`Firestore deletion failed for tenant ${item.id}:`, e);
+        }
+      }
+    }
+
+    // Handle creations / modifications
+    for (const item of updatedList) {
+      if (item.id === 'global') continue;
+      const oldItem = oldMap.get(item.id);
+      if (!oldItem || oldItem.name !== item.name) {
+        try {
+          await setDoc(doc(db, 'tenants', item.id), item);
+        } catch (e) {
+          console.error(`Firestore setDoc failed for tenant ${item.id}:`, e);
+        }
+      }
+    }
+
+    setTenants(updatedList);
+    localStorage.setItem('spirit_alchemist_tenants', JSON.stringify(updatedList));
+    localStorage.setItem('cobarra_tenants', JSON.stringify(updatedList));
   };
 
   // --- INGREDIENTS STATE ---
@@ -325,49 +385,70 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        const email = firebaseUser.email || '';
-        const name = firebaseUser.displayName || email.split('@')[0];
-        
-        const resolved = getTenantFromEmail(email);
-        const emailLower = email.toLowerCase().trim();
-        const existingCustom = usersList.find((u) => u.email.toLowerCase() === emailLower);
+        let appUser: User | null = null;
 
-        let role: 'superadmin' | 'client' = 'client';
-        if (
-          emailLower === 'nico@spiritalchemistllc.com' ||
-          emailLower === 'nikolaslorenzo@gmail.com' ||
-          emailLower === 'admin@beveragecosting.com' ||
-          (existingCustom && existingCustom.user.role === 'superadmin')
-        ) {
-          role = 'superadmin';
+        if (firebaseUser.isAnonymous) {
+          const local = localStorage.getItem('spirit_alchemist_current_user') || localStorage.getItem('cobarra_current_user');
+          if (local) {
+            try {
+              const parsed = JSON.parse(local);
+              if (parsed) {
+                appUser = {
+                  ...parsed,
+                  id: firebaseUser.uid,
+                };
+              }
+            } catch (e) {
+              console.warn('Error reviving anonymous session user', e);
+            }
+          }
+        } else {
+          // Google provider user
+          const email = firebaseUser.email || '';
+          const name = firebaseUser.displayName || email.split('@')[0];
+          
+          const resolved = getTenantFromEmail(email);
+          const emailLower = email.toLowerCase().trim();
+          const existingCustom = usersList.find((u) => u.email.toLowerCase() === emailLower);
+
+          let role: 'superadmin' | 'client' = 'client';
+          if (
+            emailLower === 'nico@spiritalchemistllc.com' ||
+            emailLower === 'nikolaslorenzo@gmail.com' ||
+            emailLower === 'admin@beveragecosting.com' ||
+            (existingCustom && existingCustom.user.role === 'superadmin')
+          ) {
+            role = 'superadmin';
+          }
+
+          const tenantId = existingCustom ? existingCustom.user.tenantId : resolved.id;
+
+          appUser = {
+            id: firebaseUser.uid,
+            email,
+            name: existingCustom ? existingCustom.user.name : name,
+            role,
+            tenantId,
+          };
+          
+          const tenantName = existingCustom 
+            ? (tenants.find((t) => t.id === tenantId)?.name || tenantId) 
+            : resolved.name;
+
+          if (tenantId !== 'global') {
+            registerTenantIfNeeded(tenantId, tenantName);
+          }
         }
 
-        const tenantId = existingCustom ? existingCustom.user.tenantId : resolved.id;
-
-        const appUser: User = {
-          id: firebaseUser.uid,
-          email,
-          name: existingCustom ? existingCustom.user.name : name,
-          role,
-          tenantId,
-        };
-        
-        const tenantName = existingCustom 
-          ? (tenants.find((t) => t.id === tenantId)?.name || tenantId) 
-          : resolved.name;
-
-        if (tenantId !== 'global') {
-          registerTenantIfNeeded(tenantId, tenantName);
+        if (appUser) {
+          // Maintain secure references in Firestore
+          try {
+            await setDoc(doc(db, 'users', firebaseUser.uid), appUser);
+          } catch (e) {
+            console.error('Error syncing user profile to Firestore:', e);
+          }
+          setCurrentUser(appUser);
         }
-
-        // Maintain secure references in Firestore
-        try {
-          await setDoc(doc(db, 'users', firebaseUser.uid), appUser);
-        } catch (e) {
-          console.error('Error syncing user profile to Firestore:', e);
-        }
-
-        setCurrentUser(appUser);
       }
     });
     return () => unsubscribe();
@@ -400,6 +481,8 @@ export default function App() {
         list.push(doc.data() as MasterIngredient);
       });
       setIngredients(list);
+      localStorage.setItem('spirit_alchemist_ingredients', JSON.stringify(list));
+      localStorage.setItem('cobarra_ingredients', JSON.stringify(list));
 
       // Seed if empty, superadmin is logged in, and NOT manually cleared
       if (list.length === 0 && currentUser.role === 'superadmin') {
@@ -426,6 +509,8 @@ export default function App() {
         list.push(doc.data() as Recipe);
       });
       setRecipes(list);
+      localStorage.setItem('spirit_alchemist_recipes', JSON.stringify(list));
+      localStorage.setItem('cobarra_recipes', JSON.stringify(list));
 
       // Seed if empty, superadmin is logged in, and NOT manually cleared
       if (list.length === 0 && currentUser.role === 'superadmin') {
@@ -446,9 +531,36 @@ export default function App() {
       console.warn('Firestore subscription - recipes channel offline or unconfigured. Falling back to Local Cache:', error);
     });
 
+    // Real-time tenants configuration listener
+    const unsubTenants = onSnapshot(collection(db, 'tenants'), (snapshot) => {
+      const list: Tenant[] = [];
+      snapshot.forEach((doc) => {
+        list.push(doc.data() as Tenant);
+      });
+      
+      // Ensure 'global' remains first or is present
+      if (!list.some(t => t.id === 'global')) {
+        list.unshift({ id: 'global', name: 'Corporate Standard / Global' });
+      } else {
+        // Move global to front
+        const idx = list.findIndex(t => t.id === 'global');
+        if (idx > 0) {
+          const [g] = list.splice(idx, 1);
+          list.unshift(g);
+        }
+      }
+
+      setTenants(list);
+      localStorage.setItem('spirit_alchemist_tenants', JSON.stringify(list));
+      localStorage.setItem('cobarra_tenants', JSON.stringify(list));
+    }, (error) => {
+      console.warn('Firestore subscription - tenants channel offline/unconfigured.', error);
+    });
+
     return () => {
       unsubIng();
       unsubRec();
+      unsubTenants();
     };
   }, [currentUser]);
 
@@ -643,22 +755,48 @@ export default function App() {
   }, [visibleRecipes, recipes, ingredients]);
 
   // Handles client or superadmin login credentials validation
-  const handleFormLogin = (e: React.FormEvent) => {
+  const handleFormLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
+    setIsLoggingIn(true);
     const match = usersList.find(
       (u) => u.email.toLowerCase() === loginEmail.trim().toLowerCase() && u.pass === loginPassword
     );
 
     if (match) {
-      setCurrentUser(match.user);
-      setLoginEmail('');
-      setLoginPassword('');
-      // Auto select first accessible recipe
-      setSelectedRecipeId(null);
-      setActiveCatalogMode(false);
+      try {
+        const credentials = await signInAnonymously(auth);
+        const firebaseUser = credentials.user;
+
+        const appUser: User = {
+          id: firebaseUser.uid,
+          email: match.user.email,
+          name: match.user.name,
+          role: match.user.role,
+          tenantId: match.user.tenantId,
+        };
+
+        // Write custom user details under their anonymous uid
+        await setDoc(doc(db, 'users', firebaseUser.uid), appUser);
+
+        localStorage.setItem('spirit_alchemist_current_user', JSON.stringify(appUser));
+        localStorage.setItem('cobarra_current_user', JSON.stringify(appUser));
+
+        setCurrentUser(appUser);
+        setLoginEmail('');
+        setLoginPassword('');
+        // Auto select first accessible recipe
+        setSelectedRecipeId(null);
+        setActiveCatalogMode(false);
+      } catch (err: any) {
+        console.error('Anonymous auth pairing failed:', err);
+        setLoginError('Secure session authentication failed: ' + err.message);
+      } finally {
+        setIsLoggingIn(false);
+      }
     } else {
       setLoginError('Incorrect credentials. Please verify your email and password and try again.');
+      setIsLoggingIn(false);
     }
   };
 
@@ -728,6 +866,8 @@ export default function App() {
     } catch (e) {
       console.error('Error signing out from Firebase', e);
     }
+    localStorage.removeItem('spirit_alchemist_current_user');
+    localStorage.removeItem('cobarra_current_user');
     setCurrentUser(null);
     setSelectedRecipeId(null);
     setActiveCatalogMode(false);
@@ -1212,9 +1352,9 @@ export default function App() {
           <div className="animate-fadeIn">
             <EnterpriseAdminConsole
               tenants={tenants}
-              setTenants={setTenants}
+              setTenants={handleTenantsChange}
               usersList={usersList}
-              setUsersList={setUsersList}
+              setUsersList={handleUsersListChange}
               currentUser={currentUser}
             />
           </div>

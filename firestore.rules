@@ -94,7 +94,14 @@ service cloud.firestore {
 
     // CUSTOM USERS COLLECTION
     match /custom_users/{email} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // TENANTS COLLECTION
+    match /tenants/{tenantId} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
     }
 
     // INGREDIENTS COLLECTION
