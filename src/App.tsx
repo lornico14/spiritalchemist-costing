@@ -199,10 +199,100 @@ export default function App() {
     return MOCK_USERS;
   });
 
+  const prevUsersListRef = React.useRef<{ email: string; pass: string; user: User }[]>([]);
+
   useEffect(() => {
     localStorage.setItem('spirit_alchemist_custom_users', JSON.stringify(usersList));
     localStorage.setItem('cobarra_custom_users', JSON.stringify(usersList)); // backwards-compatible syncer
+
+    // Detect and sync deletions to Firestore
+    const prevList = prevUsersListRef.current;
+    if (prevList && prevList.length > 0) {
+      const currentEmails = new Set(usersList.map((u) => u.email.toLowerCase()));
+      prevList.forEach(async (prevItem) => {
+        const isMock = MOCK_USERS.some(
+          (m) => m.email.toLowerCase() === prevItem.email.toLowerCase() && m.pass === prevItem.pass
+        );
+        if (!isMock && !currentEmails.has(prevItem.email.toLowerCase())) {
+          try {
+            await deleteDoc(doc(db, 'custom_users', prevItem.email.toLowerCase().trim()));
+          } catch (e) {
+            console.warn('Firestore deletion sync failed for:', prevItem.email, e);
+          }
+        }
+      });
+    }
+    prevUsersListRef.current = usersList;
+
+    // Detect and sync additions/updates to Firestore
+    const syncToFirestore = async () => {
+      for (const item of usersList) {
+        const isMock = MOCK_USERS.some(
+          (m) => m.email.toLowerCase() === item.email.toLowerCase() && m.pass === item.pass
+        );
+        if (!isMock) {
+          try {
+            await setDoc(doc(db, 'custom_users', item.email.toLowerCase().trim()), item);
+          } catch (e) {
+            console.warn('Sync custom user to Firestore failed:', item.email, e);
+          }
+        }
+      }
+    };
+    syncToFirestore();
   }, [usersList]);
+
+  // --- REAL-TIME FIRESTORE CUSTOM USERS SYNCHRONIZATION ---
+  useEffect(() => {
+    const qUsers = collection(db, 'custom_users');
+    const unsubUsers = onSnapshot(
+      qUsers,
+      (snapshot) => {
+        const list: { email: string; pass: string; user: User }[] = [];
+        snapshot.forEach((doc) => {
+          list.push(doc.data() as { email: string; pass: string; user: User });
+        });
+
+        if (list.length > 0) {
+          setUsersList((prev) => {
+            const firestoreMap = new Map(list.map((item) => [item.email.toLowerCase(), item]));
+            
+            // Rebuild with MOCK_USERS as baseline
+            const updatedList = [...MOCK_USERS];
+
+            // Retain unsynced local-only items (to avoid losing any client state before sync writes back)
+            prev.forEach((prevItem) => {
+              const isMock = MOCK_USERS.some(
+                (m) => m.email.toLowerCase() === prevItem.email.toLowerCase()
+              );
+              if (!isMock && !firestoreMap.has(prevItem.email.toLowerCase())) {
+                updatedList.push(prevItem);
+              }
+            });
+
+            // Overwrite or append custom users downloaded from Firestore
+            list.forEach((fsItem) => {
+              const idx = updatedList.findIndex(
+                (item) => item.email.toLowerCase() === fsItem.email.toLowerCase()
+              );
+              if (idx !== -1) {
+                updatedList[idx] = fsItem;
+              } else {
+                updatedList.push(fsItem);
+              }
+            });
+
+            return updatedList;
+          });
+        }
+      },
+      (error) => {
+        console.warn('Firestore subscription - custom_users channel offline. Using Local Cache:', error);
+      }
+    );
+
+    return () => unsubUsers();
+  }, []);
 
   const registerTenantIfNeeded = (tId: string, tName: string) => {
     setTenants((prev) => {
@@ -918,6 +1008,50 @@ export default function App() {
               )}
               <span>{isLoggingIn ? 'Iniciando sesión...' : 'Iniciar sesión con Google'}</span>
             </button>
+
+            <div className="pt-4 border-t border-slate-800 space-y-3">
+              <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-widest block font-sans">
+                🔐 Preconfigured Demo Profiles
+              </span>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                Click on any client or admin workspace role profile below to instantly log in using their credentials:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {usersList.slice(0, 4).map((mockRec) => {
+                  return (
+                    <button
+                      key={mockRec.email}
+                      type="button"
+                      onClick={() => handleQuickLogin(mockRec.email, mockRec.pass)}
+                      className="text-left p-2.5 bg-slate-850 hover:bg-slate-800 border border-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded-xl transition cursor-pointer group"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className={`p-1.5 rounded-lg shrink-0 ${
+                          mockRec.user.role === 'superadmin' ? 'bg-amber-500/10 text-amber-400' : 'bg-indigo-500/10 text-indigo-400'
+                        }`}>
+                          {mockRec.user.role === 'superadmin' ? (
+                            <Lock className="h-3.5 w-3.5" />
+                          ) : (
+                            <Building className="h-3.5 w-3.5" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[10px] font-bold text-slate-200 group-hover:text-white truncate">
+                            {mockRec.user.name.split(' (')[0]}
+                          </div>
+                          <div className="text-[9px] text-slate-400 truncate">
+                            {mockRec.email}
+                          </div>
+                          <div className="text-[8.5px] mt-0.5 font-bold flex items-center justify-between text-slate-500 group-hover:text-slate-400">
+                            <span>Password: <span className="font-mono text-slate-300">{mockRec.pass}</span></span>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             <div className="p-3 bg-slate-800/40 rounded-xl border border-slate-700/50 text-[10px] text-slate-400 leading-relaxed mt-4">
               <span className="font-bold text-amber-400 block mb-1">💡 Sugerencia para el Navegador:</span>

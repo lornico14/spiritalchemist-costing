@@ -92,6 +92,11 @@ service cloud.firestore {
       allow delete: if isSuperAdmin();
     }
 
+    // CUSTOM USERS COLLECTION
+    match /custom_users/{email} {
+      allow read, write: if true;
+    }
+
     // INGREDIENTS COLLECTION
     match /ingredients/{ingredientId} {
       allow get: if isSignedIn() && (
