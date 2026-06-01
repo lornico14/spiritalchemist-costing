@@ -765,19 +765,32 @@ export default function App() {
 
     if (match) {
       try {
-        const credentials = await signInAnonymously(auth);
-        const firebaseUser = credentials.user;
+        let appUser: User;
+        try {
+          const credentials = await signInAnonymously(auth);
+          const firebaseUser = credentials.user;
 
-        const appUser: User = {
-          id: firebaseUser.uid,
-          email: match.user.email,
-          name: match.user.name,
-          role: match.user.role,
-          tenantId: match.user.tenantId,
-        };
+          appUser = {
+            id: firebaseUser.uid,
+            email: match.user.email,
+            name: match.user.name,
+            role: match.user.role,
+            tenantId: match.user.tenantId,
+          };
 
-        // Write custom user details under their anonymous uid
-        await setDoc(doc(db, 'users', firebaseUser.uid), appUser);
+          // Write custom user details under their anonymous uid
+          await setDoc(doc(db, 'users', firebaseUser.uid), appUser);
+        } catch (firebaseErr: any) {
+          console.warn('Anonymous Firebase Authentication restriction / offline. Falling back to secure local session:', firebaseErr);
+          // Fallback to local session
+          appUser = {
+            id: `local-anon-${match.user.tenantId}-${match.user.email.replace(/[^a-zA-Z0-9]/g, '')}`,
+            email: match.user.email,
+            name: match.user.name,
+            role: match.user.role,
+            tenantId: match.user.tenantId,
+          };
+        }
 
         localStorage.setItem('spirit_alchemist_current_user', JSON.stringify(appUser));
         localStorage.setItem('cobarra_current_user', JSON.stringify(appUser));
@@ -789,8 +802,8 @@ export default function App() {
         setSelectedRecipeId(null);
         setActiveCatalogMode(false);
       } catch (err: any) {
-        console.error('Anonymous auth pairing failed:', err);
-        setLoginError('Secure session authentication failed: ' + err.message);
+        console.error('Login action failed:', err);
+        setLoginError('Error logging in: ' + err.message);
       } finally {
         setIsLoggingIn(false);
       }
@@ -1107,12 +1120,19 @@ export default function App() {
 
         {/* LOGGED USER CARD */}
         <div className="p-3 bg-slate-850 rounded-xl border border-slate-800 flex items-center gap-2.5">
-          <div className="h-8 w-8 rounded-full bg-slate-700 flex items-center justify-center text-white font-bold text-xs">
+          <div className="h-8 w-8 rounded-full bg-slate-700 flex items-center justify-center text-white font-bold text-xs uppercase">
             {currentUser.name[0]}
           </div>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 text-left">
             <div className="font-bold text-xs text-slate-200 truncate">{currentUser.name}</div>
-            <div className="text-[9px] text-slate-400 truncate">{currentUser.email}</div>
+            <div className="text-[9px] text-slate-400 truncate flex items-center gap-1.5 flex-wrap">
+              <span>{currentUser.email}</span>
+              {currentUser.id.startsWith('local-anon-') && (
+                <span className="px-1 py-0.5 bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 rounded text-[8px] font-bold tracking-wider uppercase scale-90 origin-left">
+                  Local Sync
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
