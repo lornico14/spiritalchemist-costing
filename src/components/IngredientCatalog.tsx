@@ -135,6 +135,7 @@ export default function IngredientCatalog({
           category: editForm.category || ing.category || "Others",
           sku: editForm.sku || "",
           productUrl: editForm.productUrl || "",
+          tenantId: editForm.tenantId || ing.tenantId || "global",
         } as MasterIngredient;
       }
       return ing;
@@ -603,21 +604,64 @@ export default function IngredientCatalog({
       </div>
 
       {selectedIds.size > 0 && (
-        <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-fadeIn">
+        <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-fadeIn">
           <div className="space-y-1 text-center sm:text-left">
-            <h4 className="font-extrabold text-rose-900 text-sm">
+            <h4 className="font-extrabold text-indigo-900 text-sm">
               Bulk Actions Available
             </h4>
-            <p className="text-rose-700 text-xs">
+            <p className="text-indigo-700 text-xs">
               You have selected {selectedIds.size}{" "}
-              {selectedIds.size === 1 ? "ingredient" : "ingredients"}. You can
-              delete them in a single batch operation.
+              {selectedIds.size === 1 ? "ingredient" : "ingredients"}. You can delete or move them to another establishment.
             </p>
           </div>
-          <div className="flex gap-2 shrink-0">
+          <div className="flex flex-wrap gap-2 shrink-0 items-center justify-center">
+            {currentUser?.role === 'superadmin' && (
+              <div className="flex items-center gap-1.5 border border-indigo-200 bg-white px-3 py-1.5 rounded-xl shadow-sm">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Change Venue:</span>
+                <select
+                  id="bulk-move-tenant-select"
+                  className="text-xs bg-transparent border-0 font-semibold text-slate-700 focus:ring-0 focus:outline-none cursor-pointer"
+                  defaultValue=""
+                  onChange={(e) => {
+                    const destTenantId = e.target.value;
+                    if (!destTenantId) return;
+
+                    const count = selectedIds.size;
+                    if (!window.confirm(`Are you sure you want to move the ${count} selected ingredients to ${destTenantId === 'global' ? 'Global' : getTenantName(destTenantId)}?`)) {
+                      e.target.value = '';
+                      return;
+                    }
+
+                    const updated = ingredients.map((ing) => {
+                      if (selectedIds.has(ing.id)) {
+                        return {
+                          ...ing,
+                          tenantId: destTenantId,
+                        };
+                      }
+                      return ing;
+                    });
+
+                    onUpdateIngredients(updated);
+                    setSelectedIds(new Set());
+                    e.target.value = '';
+                  }}
+                >
+                  <option value="" disabled>Select Venue...</option>
+                  <option value="global">Global (Corporate/Shared)</option>
+                  {tenants.map((t) => (
+                    t.id !== 'global' && (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    )
+                  ))}
+                </select>
+              </div>
+            )}
             <button
               onClick={() => setSelectedIds(new Set())}
-              className="px-3.5 py-1.5 border border-rose-200 bg-white hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl shadow-sm transition cursor-pointer"
+              className="px-3.5 py-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-705 font-bold text-xs rounded-xl shadow-sm transition cursor-pointer"
             >
               Clear Selection
             </button>
@@ -994,14 +1038,37 @@ export default function IngredientCatalog({
 
                       <td className="px-4 py-3.5">
                         {isEditing ? (
-                          <input
-                            type="text"
-                            value={editForm.name || ""}
-                            onChange={(e) =>
-                              setEditForm({ ...editForm, name: e.target.value })
-                            }
-                            className="w-full px-2 py-1.5 border border-indigo-200 rounded-lg text-sm bg-white"
-                          />
+                          <div className="flex flex-col gap-1 min-w-[180px]">
+                            <input
+                              type="text"
+                              value={editForm.name || ""}
+                              onChange={(e) =>
+                                setEditForm({ ...editForm, name: e.target.value })
+                              }
+                              className="w-full px-2 py-1 border border-indigo-200 rounded-lg text-sm bg-white font-medium"
+                            />
+                            {currentUser?.role === 'superadmin' && (
+                              <div className="flex items-center gap-1">
+                                <span className="text-[9px] font-bold text-slate-400 uppercase">Venue:</span>
+                                <select
+                                  value={editForm.tenantId || "global"}
+                                  onChange={(e) =>
+                                    setEditForm({ ...editForm, tenantId: e.target.value })
+                                  }
+                                  className="text-[10px] px-1 py-0.5 border border-slate-200 rounded bg-white text-slate-700 min-w-[110px] focus:outline-none focus:ring-1 focus:ring-indigo-505 cursor-pointer"
+                                >
+                                  <option value="global">Global</option>
+                                  {tenants.map((t) => (
+                                    t.id !== 'global' && (
+                                      <option key={t.id} value={t.id}>
+                                        {t.name}
+                                      </option>
+                                    )
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                          </div>
                         ) : (
                           <div>
                             <div className="font-semibold text-slate-700 flex items-center gap-2">
