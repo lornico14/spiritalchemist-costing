@@ -42,58 +42,10 @@ import {
 } from 'lucide-react';
 
 const INITIAL_TENANTS: Tenant[] = [
-  { id: 'global', name: 'Corporate Standard / Global' },
-  { id: 'rest-1', name: 'Sunset Bar' },
-  { id: 'rest-2', name: 'Speakeasy Jazz Club' },
-  { id: 'thelastrawmatcha', name: 'The Last Straw Matcha' }
+  { id: 'global', name: 'Corporate Standard / Global' }
 ];
 
-const MOCK_USERS: { email: string; pass: string; user: User }[] = [
-  {
-    email: 'admin@beveragecosting.com',
-    pass: 'admin123',
-    user: {
-      id: 'usr-admin',
-      email: 'admin@beveragecosting.com',
-      name: 'Corporate General Admin',
-      role: 'superadmin',
-      tenantId: 'global'
-    }
-  },
-  {
-    email: 'atardecer@bar.com',
-    pass: 'bar123',
-    user: {
-      id: 'usr-atardecer',
-      email: 'atardecer@bar.com',
-      name: 'Luis (Sunset Bar)',
-      role: 'client',
-      tenantId: 'rest-1'
-    }
-  },
-  {
-    email: 'jazz@speakeasy.com',
-    pass: 'jazz123',
-    user: {
-      id: 'usr-jazz',
-      email: 'jazz@speakeasy.com',
-      name: 'Sophia (Speakeasy Club)',
-      role: 'client',
-      tenantId: 'rest-2'
-    }
-  },
-  {
-    email: 'cameron@thelastrawmatcha.com',
-    pass: 'matcha123',
-    user: {
-      id: 'usr-cameron',
-      email: 'cameron@thelastrawmatcha.com',
-      name: 'Cameron (The Last Straw Matcha)',
-      role: 'client',
-      tenantId: 'thelastrawmatcha'
-    }
-  }
-];
+const MOCK_USERS: { email: string; pass: string; user: User }[] = [];
 
 function getTenantFromEmail(email: string): { id: string; name: string } {
   const lowerEmail = email.toLowerCase().trim();
@@ -107,21 +59,10 @@ function getTenantFromEmail(email: string): { id: string; name: string } {
     return { id: 'global', name: 'Corporate Standard / Global' };
   }
   
-  // Pre-seed mock mappings
-  if (lowerEmail === 'atardecer@bar.com') {
-    return { id: 'rest-1', name: 'Sunset Bar' };
-  }
-  if (lowerEmail === 'jazz@speakeasy.com') {
-    return { id: 'rest-2', name: 'Speakeasy Jazz Club' };
-  }
-  if (lowerEmail === 'cameron@thelastrawmatcha.com') {
-    return { id: 'thelastrawmatcha', name: 'The Last Straw Matcha' };
-  }
-
   // Generic Dynamic Extraction
   const parts = lowerEmail.split('@');
   if (parts.length < 2) {
-    return { id: 'rest-1', name: 'Sunset Bar' };
+    return { id: 'global', name: 'Corporate Standard / Global' };
   }
   
   const domain = parts[1];
@@ -253,38 +194,25 @@ export default function App() {
           list.push(doc.data() as { email: string; pass: string; user: User });
         });
 
-        if (list.length > 0) {
-          setUsersList((prev) => {
-            const firestoreMap = new Map(list.map((item) => [item.email.toLowerCase(), item]));
-            
-            // Rebuild with MOCK_USERS as baseline
-            const updatedList = [...MOCK_USERS];
-
-            // Retain unsynced local-only items (to avoid losing any client state before sync writes back)
-            prev.forEach((prevItem) => {
-              const isMock = MOCK_USERS.some(
-                (m) => m.email.toLowerCase() === prevItem.email.toLowerCase()
-              );
-              if (!isMock && !firestoreMap.has(prevItem.email.toLowerCase())) {
-                updatedList.push(prevItem);
-              }
-            });
-
-            // Overwrite or append custom users downloaded from Firestore
-            list.forEach((fsItem) => {
-              const idx = updatedList.findIndex(
-                (item) => item.email.toLowerCase() === fsItem.email.toLowerCase()
-              );
-              if (idx !== -1) {
-                updatedList[idx] = fsItem;
-              } else {
-                updatedList.push(fsItem);
-              }
-            });
-
-            return updatedList;
-          });
-        }
+        setUsersList((prev) => {
+          const sortedPrev = [...prev].sort((a, b) => a.email.localeCompare(b.email));
+          const sortedList = [...list].sort((a, b) => a.email.localeCompare(b.email));
+          
+          if (
+            sortedPrev.length === sortedList.length &&
+            sortedPrev.every(
+              (u, i) =>
+                u.email.toLowerCase() === sortedList[i].email.toLowerCase() &&
+                u.pass === sortedList[i].pass &&
+                u.user.name === sortedList[i].user.name &&
+                u.user.role === sortedList[i].user.role &&
+                u.user.tenantId === sortedList[i].user.tenantId
+            )
+          ) {
+            return prev;
+          }
+          return list;
+        });
       },
       (error) => {
         console.warn('Firestore subscription - custom_users channel offline. Using Local Cache:', error);
@@ -730,18 +658,7 @@ export default function App() {
       setSelectedRecipeId(null);
       setActiveCatalogMode(false);
     } else {
-      setLoginError('Incorrect credentials. Make sure you entered them correctly or pick a profile below.');
-    }
-  };
-
-  // Direct mock profile login handler for easy grading/testing
-  const handleQuickLogin = (email: string, pass: string) => {
-    setLoginError('');
-    const match = usersList.find((u) => u.email === email && u.pass === pass);
-    if (match) {
-      setCurrentUser(match.user);
-      setSelectedRecipeId(null);
-      setActiveCatalogMode(false);
+      setLoginError('Incorrect credentials. Please verify your email and password and try again.');
     }
   };
 
@@ -1008,52 +925,7 @@ export default function App() {
               )}
               <span>{isLoggingIn ? 'Iniciando sesión...' : 'Iniciar sesión con Google'}</span>
             </button>
-
-            <div className="pt-4 border-t border-slate-800 space-y-3">
-              <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-widest block font-sans">
-                🔐 Preconfigured Demo Profiles
-              </span>
-              <p className="text-[10px] text-slate-400 leading-relaxed">
-                Click on any client or admin workspace role profile below to instantly log in using their credentials:
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {usersList.slice(0, 4).map((mockRec) => {
-                  return (
-                    <button
-                      key={mockRec.email}
-                      type="button"
-                      onClick={() => handleQuickLogin(mockRec.email, mockRec.pass)}
-                      className="text-left p-2.5 bg-slate-850 hover:bg-slate-800 border border-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded-xl transition cursor-pointer group"
-                    >
-                      <div className="flex items-center gap-2">
-                        <div className={`p-1.5 rounded-lg shrink-0 ${
-                          mockRec.user.role === 'superadmin' ? 'bg-amber-500/10 text-amber-400' : 'bg-indigo-500/10 text-indigo-400'
-                        }`}>
-                          {mockRec.user.role === 'superadmin' ? (
-                            <Lock className="h-3.5 w-3.5" />
-                          ) : (
-                            <Building className="h-3.5 w-3.5" />
-                          )}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="text-[10px] font-bold text-slate-200 group-hover:text-white truncate">
-                            {mockRec.user.name.split(' (')[0]}
-                          </div>
-                          <div className="text-[9px] text-slate-400 truncate">
-                            {mockRec.email}
-                          </div>
-                          <div className="text-[8.5px] mt-0.5 font-bold flex items-center justify-between text-slate-500 group-hover:text-slate-400">
-                            <span>Password: <span className="font-mono text-slate-300">{mockRec.pass}</span></span>
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="p-3 bg-slate-800/40 rounded-xl border border-slate-700/50 text-[10px] text-slate-400 leading-relaxed mt-4">
+             <div className="p-3 bg-slate-800/40 rounded-xl border border-slate-700/50 text-[10px] text-slate-400 leading-relaxed mt-4">
               <span className="font-bold text-amber-400 block mb-1">💡 Sugerencia para el Navegador:</span>
               <span>Si tu navegador bloquea el popup o muestra un error, te recomendamos abrir la aplicación en una <strong>nueva pestaña</strong> pulsando el botón con la flecha en la esquina superior de la vista previa de AI Studio.</span>
             </div>
