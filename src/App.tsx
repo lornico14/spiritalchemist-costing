@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { Recipe, MasterIngredient, RecipeVersion, YieldUnit, RecipeIngredient, User, Tenant } from './types';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Recipe, MasterIngredient, RecipeVersion, YieldUnit, RecipeIngredient, User, Tenant, MeasurementUnit, OperationType, FirestoreErrorInfo } from './types';
 import { INITIAL_INGREDIENTS, INITIAL_RECIPES } from './data/initialData';
 import { auth, googleSignIn, logout as firebaseLogout, db } from './lib/firebase';
 import { onAuthStateChanged, signInAnonymously } from 'firebase/auth';
-import { collection, doc, setDoc, deleteDoc, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, doc, setDoc, deleteDoc, query, where, onSnapshot, getDocFromServer } from 'firebase/firestore';
 import { calculateIngredientCost, calculateVersionCostWithSubrecipes, getRecipeTotalCost } from './utils/conversions';
 import IngredientCatalog from './components/IngredientCatalog';
 import RecipeCostingWorkspace from './components/RecipeCostingWorkspace';
@@ -40,6 +40,18 @@ import {
   AlertCircle,
   Trash
 } from 'lucide-react';
+
+function isQuotaError(error: any): boolean {
+  if (!error) return false;
+  const message = (error.message || String(error)).toLowerCase();
+  const code = (error.code || '').toLowerCase();
+  return (
+    message.includes('quota') ||
+    message.includes('exhausted') ||
+    code.includes('resource-exhausted') ||
+    message.includes('limit exceeded')
+  );
+}
 
 const INITIAL_TENANTS: Tenant[] = [
   { id: 'global', name: 'Corporate Standard / Global' }
@@ -114,6 +126,18 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [syncOffline, setSyncOffline] = useState(() => {
+    const localUser = localStorage.getItem('spirit_alchemist_current_user') || localStorage.getItem('cobarra_current_user');
+    if (localUser) {
+      try {
+        const u = JSON.parse(localUser);
+        if (u && u.id && u.id.startsWith('local-anon-')) {
+          return true;
+        }
+      } catch (e) {}
+    }
+    return false;
+  });
 
   // --- TENANTS STATE ---
   const [tenants, setTenants] = useState<Tenant[]>(() => {
@@ -232,6 +256,9 @@ export default function App() {
       },
       (error) => {
         console.warn('Firestore subscription - custom_users channel offline. Using Local Cache:', error);
+        if (isQuotaError(error)) {
+          setIsQuotaExceeded(true);
+        }
       }
     );
 
@@ -317,6 +344,23 @@ export default function App() {
     return INITIAL_RECIPES;
   });
 
+  // Track locally deleted items to prevent real-time sync from restoring deleted items before the server sync executes
+  const [deletedIngredients, setDeletedIngredients] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('spirit_alchemist_deleted_ingredients') || '[]');
+    } catch {
+      return [];
+    }
+  });
+
+  const [deletedRecipes, setDeletedRecipes] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('spirit_alchemist_deleted_recipes') || '[]');
+    } catch {
+      return [];
+    }
+  });
+
   // --- NAVIGATION STATE ---
   const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
   const [activeCatalogMode, setActiveCatalogMode] = useState(false);
@@ -328,6 +372,48 @@ export default function App() {
 
   // --- MODALS FLOWS ---
   const [showAddRecipeModal, setShowAddRecipeModal] = useState(false);
+  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
+
+  // Firestore connection checker
+  useEffect(() => {
+    async function testConnection() {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error: any) {
+        if (isQuotaError(error)) {
+          setIsQuotaExceeded(true);
+        }
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration.");
+        }
+      }
+    }
+    testConnection();
+  }, []);
+
+  const handleFirestoreError = (error: unknown, operationType: OperationType, path: string | null) => {
+    if (isQuotaError(error)) {
+      setIsQuotaExceeded(true);
+    }
+    const errInfo: FirestoreErrorInfo = {
+      error: error instanceof Error ? error.message : String(error),
+      authInfo: {
+        userId: auth.currentUser?.uid,
+        email: auth.currentUser?.email,
+        emailVerified: auth.currentUser?.emailVerified,
+        isAnonymous: auth.currentUser?.isAnonymous,
+        tenantId: auth.currentUser?.tenantId,
+        providerInfo: auth.currentUser?.providerData?.map(provider => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || []
+      },
+      operationType,
+      path
+    };
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+    throw new Error(JSON.stringify(errInfo));
+  };
 
   // Create recipe fields states
   const [newRecipeName, setNewRecipeName] = useState('');
@@ -337,6 +423,23 @@ export default function App() {
   const [newRecipeYieldUnit, setNewRecipeYieldUnit] = useState<YieldUnit>('ml');
   const [newRecipeTenant, setNewRecipeTenant] = useState<string>('global');
   const [initialIngredientsSelection, setInitialIngredientsSelection] = useState<string[]>([]);
+  const [initialIngredientQuantities, setInitialIngredientQuantities] = useState<Record<string, string>>({});
+  const [initialIngredientUnits, setInitialIngredientUnits] = useState<Record<string, MeasurementUnit>>({});
+
+  const lastWrittenUserRef = useRef<string | null>(null);
+  const seedingIngredientsAttempted = useRef(false);
+  const seedingRecipesAttempted = useRef(false);
+  const usersListRef = useRef(usersList);
+  const tenantsRef = useRef(tenants);
+
+  // Sync refs to dynamic states
+  useEffect(() => {
+    usersListRef.current = usersList;
+  }, [usersList]);
+
+  useEffect(() => {
+    tenantsRef.current = tenants;
+  }, [tenants]);
 
   // Reset selected recipe when list filters or changes to avoid stale selections
   useEffect(() => {
@@ -409,7 +512,7 @@ export default function App() {
           
           const resolved = getTenantFromEmail(email);
           const emailLower = email.toLowerCase().trim();
-          const existingCustom = usersList.find((u) => u.email.toLowerCase() === emailLower);
+          const existingCustom = usersListRef.current.find((u) => u.email.toLowerCase() === emailLower);
 
           let role: 'superadmin' | 'client' = 'client';
           if (
@@ -432,7 +535,7 @@ export default function App() {
           };
           
           const tenantName = existingCustom 
-            ? (tenants.find((t) => t.id === tenantId)?.name || tenantId) 
+            ? (tenantsRef.current.find((t) => t.id === tenantId)?.name || tenantId) 
             : resolved.name;
 
           if (tenantId !== 'global') {
@@ -441,18 +544,27 @@ export default function App() {
         }
 
         if (appUser) {
-          // Maintain secure references in Firestore
-          try {
-            await setDoc(doc(db, 'users', firebaseUser.uid), appUser);
-          } catch (e) {
-            console.error('Error syncing user profile to Firestore:', e);
+          const userStr = JSON.stringify(appUser);
+          if (lastWrittenUserRef.current !== userStr) {
+            lastWrittenUserRef.current = userStr;
+            // Maintain secure references in Firestore
+            try {
+              await setDoc(doc(db, 'users', firebaseUser.uid), appUser);
+            } catch (e) {
+              console.error('Error syncing user profile to Firestore:', e);
+            }
           }
-          setCurrentUser(appUser);
+          setCurrentUser((prev) => {
+            if (prev && JSON.stringify(prev) === userStr) {
+              return prev;
+            }
+            return appUser;
+          });
         }
       }
     });
     return () => unsubscribe();
-  }, [usersList, tenants]);
+  }, []);
 
   // --- REAL-TIME FIRESTORE SYNCHRONIZATION EFFECT ---
   useEffect(() => {
@@ -480,14 +592,20 @@ export default function App() {
       snapshot.forEach((doc) => {
         list.push(doc.data() as MasterIngredient);
       });
-      setIngredients(list);
-      localStorage.setItem('spirit_alchemist_ingredients', JSON.stringify(list));
-      localStorage.setItem('cobarra_ingredients', JSON.stringify(list));
+
+      setIngredients(() => {
+        // Filter out elements that are locally marked as deleted
+        const filteredList = list.filter((i) => !deletedIngredients.includes(i.id));
+        localStorage.setItem('spirit_alchemist_ingredients', JSON.stringify(filteredList));
+        localStorage.setItem('cobarra_ingredients', JSON.stringify(filteredList));
+        return filteredList;
+      });
 
       // Seed if empty, superadmin is logged in, and NOT manually cleared
       if (list.length === 0 && currentUser.role === 'superadmin') {
         const alreadyCleared = localStorage.getItem('spirit_alchemist_manually_cleared_ingredients') === 'true';
-        if (!alreadyCleared) {
+        if (!alreadyCleared && !seedingIngredientsAttempted.current) {
+          seedingIngredientsAttempted.current = true;
           INITIAL_INGREDIENTS.forEach(async (ing) => {
             try {
               await setDoc(doc(db, 'ingredients', ing.id), ing);
@@ -501,6 +619,10 @@ export default function App() {
       }
     }, (error) => {
       console.warn('Firestore subscription - ingredients channel offline or unconfigured. Falling back to Local Cache:', error);
+      if (isQuotaError(error)) {
+        setIsQuotaExceeded(true);
+      }
+      setSyncOffline(true);
     });
 
     const unsubRec = onSnapshot(qRec, (snapshot) => {
@@ -508,14 +630,20 @@ export default function App() {
       snapshot.forEach((doc) => {
         list.push(doc.data() as Recipe);
       });
-      setRecipes(list);
-      localStorage.setItem('spirit_alchemist_recipes', JSON.stringify(list));
-      localStorage.setItem('cobarra_recipes', JSON.stringify(list));
+
+      setRecipes(() => {
+        // Filter out elements that are locally marked as deleted
+        const filteredList = list.filter((r) => !deletedRecipes.includes(r.id));
+        localStorage.setItem('spirit_alchemist_recipes', JSON.stringify(filteredList));
+        localStorage.setItem('cobarra_recipes', JSON.stringify(filteredList));
+        return filteredList;
+      });
 
       // Seed if empty, superadmin is logged in, and NOT manually cleared
       if (list.length === 0 && currentUser.role === 'superadmin') {
         const alreadyCleared = localStorage.getItem('spirit_alchemist_manually_cleared_recipes') === 'true';
-        if (!alreadyCleared) {
+        if (!alreadyCleared && !seedingRecipesAttempted.current) {
+          seedingRecipesAttempted.current = true;
           INITIAL_RECIPES.forEach(async (rec) => {
             try {
               await setDoc(doc(db, 'recipes', rec.id), rec);
@@ -529,6 +657,10 @@ export default function App() {
       }
     }, (error) => {
       console.warn('Firestore subscription - recipes channel offline or unconfigured. Falling back to Local Cache:', error);
+      if (isQuotaError(error)) {
+        setIsQuotaExceeded(true);
+      }
+      setSyncOffline(true);
     });
 
     // Real-time tenants configuration listener
@@ -555,6 +687,9 @@ export default function App() {
       localStorage.setItem('cobarra_tenants', JSON.stringify(list));
     }, (error) => {
       console.warn('Firestore subscription - tenants channel offline/unconfigured.', error);
+      if (isQuotaError(error)) {
+        setIsQuotaExceeded(true);
+      }
     });
 
     return () => {
@@ -579,6 +714,25 @@ export default function App() {
     // Direct delta syncing to Firestore
     const updatedIds = new Set(updated.map((i) => i.id));
     const deleted = ingredients.filter((i) => !updatedIds.has(i.id));
+
+    // Update locally deleted list to prevent reappearing during sync delays
+    const deletedIds = deleted.map((item) => item.id);
+    if (deletedIds.length > 0) {
+      setDeletedIngredients((prev) => {
+        const next = Array.from(new Set([...prev, ...deletedIds]));
+        localStorage.setItem('spirit_alchemist_deleted_ingredients', JSON.stringify(next));
+        return next;
+      });
+    }
+
+    // Clean up recreated/re-existing ones from deleted list
+    if (updatedIds.size > 0) {
+      setDeletedIngredients((prev) => {
+        const next = prev.filter((id) => !updatedIds.has(id));
+        localStorage.setItem('spirit_alchemist_deleted_ingredients', JSON.stringify(next));
+        return next;
+      });
+    }
 
     // Handle deletions in background
     for (const item of deleted) {
@@ -607,6 +761,12 @@ export default function App() {
     try {
       localStorage.removeItem('spirit_alchemist_manually_cleared_ingredients');
       localStorage.removeItem('spirit_alchemist_manually_cleared_recipes');
+
+      // Clear deleted trackers
+      setDeletedIngredients([]);
+      setDeletedRecipes([]);
+      localStorage.removeItem('spirit_alchemist_deleted_ingredients');
+      localStorage.removeItem('spirit_alchemist_deleted_recipes');
 
       // OPTIMISTIC LOCAL RESTORE
       setIngredients(INITIAL_INGREDIENTS);
@@ -643,10 +803,12 @@ export default function App() {
     if (!currentUser) return;
 
     // OPTIMISTIC LOCAL STATE UPDATE
-    const updatedRecipes = recipes.map((r) => (r.id === updated.id ? updated : r));
-    setRecipes(updatedRecipes);
-    localStorage.setItem('spirit_alchemist_recipes', JSON.stringify(updatedRecipes));
-    localStorage.setItem('cobarra_recipes', JSON.stringify(updatedRecipes));
+    setRecipes((prev) => {
+      const updatedRecipes = prev.map((r) => (r.id === updated.id ? updated : r));
+      localStorage.setItem('spirit_alchemist_recipes', JSON.stringify(updatedRecipes));
+      localStorage.setItem('cobarra_recipes', JSON.stringify(updatedRecipes));
+      return updatedRecipes;
+    });
 
     try {
       await setDoc(doc(db, 'recipes', updated.id), updated);
@@ -782,6 +944,7 @@ export default function App() {
           await setDoc(doc(db, 'users', firebaseUser.uid), appUser);
         } catch (firebaseErr: any) {
           console.warn('Anonymous Firebase Authentication restriction / offline. Falling back to secure local session:', firebaseErr);
+          setSyncOffline(true);
           // Fallback to local session
           appUser = {
             id: `local-anon-${match.user.tenantId}-${match.user.email.replace(/[^a-zA-Z0-9]/g, '')}`,
@@ -856,6 +1019,7 @@ export default function App() {
         }
         
         setCurrentUser(appUser);
+        setSyncOffline(false);
         setSelectedRecipeId(null);
         setActiveCatalogMode(false);
       }
@@ -884,6 +1048,7 @@ export default function App() {
     setCurrentUser(null);
     setSelectedRecipeId(null);
     setActiveCatalogMode(false);
+    setSyncOffline(false);
   };
 
   // Create recipe callback triggered in modal
@@ -901,12 +1066,15 @@ export default function App() {
     const initialRows: RecipeIngredient[] = initialIngredientsSelection.map((ingId, idx) => {
       // Determine if selected ingredient was a sub-recipe
       const isSub = recipes.some((r) => r.id === ingId);
+      const userQtyStr = initialIngredientQuantities[ingId];
+      const userQty = userQtyStr !== undefined ? parseFloat(userQtyStr) : (isSub ? 30 : 25);
+      const userUnit = initialIngredientUnits[ingId];
       return {
         id: `row-init-${idx}-${Date.now()}`,
         ingredientId: ingId,
         isSubRecipe: isSub,
-        quantity: isSub ? 30 : 25, // default
-        unit: 'ml',
+        quantity: isNaN(userQty) ? (isSub ? 30 : 25) : userQty,
+        unit: userUnit !== undefined ? userUnit : 'ml',
       };
     });
 
@@ -936,6 +1104,13 @@ export default function App() {
     localStorage.setItem('spirit_alchemist_recipes', JSON.stringify(updatedRecipes));
     localStorage.setItem('cobarra_recipes', JSON.stringify(updatedRecipes));
 
+    // Clear from deleted tracking list if recreated/added
+    setDeletedRecipes((prev) => {
+      const next = prev.filter((id) => id !== newRecipeId);
+      localStorage.setItem('spirit_alchemist_deleted_recipes', JSON.stringify(next));
+      return next;
+    });
+
     setSelectedRecipeId(newRecipeId);
     setActiveCatalogMode(false);
     setShowAddRecipeModal(false);
@@ -947,6 +1122,8 @@ export default function App() {
     setNewRecipeYieldVal(300);
     setNewRecipeYieldUnit('ml');
     setInitialIngredientsSelection([]);
+    setInitialIngredientQuantities({});
+    setInitialIngredientUnits({});
 
     // BG SYNC
     try {
@@ -970,6 +1147,14 @@ export default function App() {
       if (selectedRecipeId === recipeToDelete.id) {
         setSelectedRecipeId(null);
       }
+
+      // Add to deleted recipes tracking list to prevent snaps from recovering it
+      setDeletedRecipes((prev) => {
+        const next = Array.from(new Set([...prev, recipeToDelete.id]));
+        localStorage.setItem('spirit_alchemist_deleted_recipes', JSON.stringify(next));
+        return next;
+      });
+
       setRecipeToDelete(null);
 
       // BG SYNC
@@ -995,6 +1180,44 @@ export default function App() {
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 sm:p-6" id="login-layout-wrapper">
+        {isQuotaExceeded && (
+          <div className="max-w-md w-full mb-6 p-4 bg-amber-500/10 border border-amber-500/20 text-slate-100 rounded-3xl space-y-3 shadow-lg text-left" id="quota-warning-banner-login">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="text-sm font-black text-amber-400 uppercase tracking-wider leading-tight">
+                  Límite de Consumo Excedido (Firestore Quota Exceeded)
+                </h4>
+                <p className="text-xs text-slate-300 leading-normal mt-1">
+                  Has alcanzado el límite de escritura gratuito diario para la base de datos de este proyecto.
+                </p>
+              </div>
+            </div>
+            
+            <div className="text-[10px] text-slate-400 space-y-2 pl-7 border-t border-slate-800/80 pt-2.5 leading-relaxed">
+              <p>
+                Tu sesión actual se guardará de manera <strong className="text-slate-200">local en este navegador</strong>, pero las modificaciones <strong className="text-amber-300">no se sincronizarán en tiempo real en la nube</strong> ni serán visibles por otros usuarios hasta que se reinicie la cuota diaria (mañana) o escales el plan de Firebase.
+              </p>
+              <p>
+                <span className="font-bold text-slate-300 block mb-0.5">Siguiente restauración de límite:</span>
+                La cuota gratuita de Spark se reinicia mañana. Encuentra más detalles en la columna del plan **Spark** en la sección **Enterprise edition** de la <a href="https://firebase.google.com/pricing#cloud-firestore" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline font-bold">Guía de precios de Firebase</a>.
+              </p>
+              <p className="bg-slate-950/60 p-2 rounded-xl border border-slate-800">
+                <span className="text-indigo-300 font-bold block mb-0.5">Enlace directo para Administradores:</span>
+                Para ver el uso de la base de datos o expandir la cuota de inmediato, ingresa aquí:
+                <a 
+                  href="https://console.firebase.google.com/project/boda-webpage/firestore/databases/ai-studio-6bfdacd0-fdfe-4e8a-82c9-6343fc69856f/data?openUpgradeDialog=true" 
+                  target="_blank" 
+                  rel="noopener noreferrer" 
+                  className="text-amber-400 hover:underline block truncate mt-1 font-mono"
+                >
+                  console.firebase.google.com/project/boda-webpage/firestore/databases/ai-studio-6bfdacd0-fdfe-4e8a-82c9-6343fc69856f/data?openUpgradeDialog=true
+                </a>
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="max-w-md w-full space-y-8 bg-slate-900 px-6 py-8 rounded-3xl border border-slate-800 shadow-2xl animate-fadeIn">
           {/* Brand header */}
           <div className="text-center space-y-2">
@@ -1078,6 +1301,8 @@ export default function App() {
               )}
               <span>{isLoggingIn ? 'Iniciando sesión...' : 'Iniciar sesión con Google'}</span>
             </button>
+
+
              <div className="p-3 bg-slate-800/40 rounded-xl border border-slate-700/50 text-[10px] text-slate-400 leading-relaxed mt-4">
               <span className="font-bold text-amber-400 block mb-1">💡 Sugerencia para el Navegador:</span>
               <span>Si tu navegador bloquea el popup o muestra un error, te recomendamos abrir la aplicación en una <strong>nueva pestaña</strong> pulsando el botón con la flecha en la esquina superior de la vista previa de AI Studio.</span>
@@ -1329,6 +1554,65 @@ export default function App() {
 
       {/* RIGHT CONTROLLER: Workspaces Router */}
       <main className="flex-1 flex flex-col overflow-y-auto p-4 sm:p-6 md:p-8 space-y-6 text-left">
+        {/* Firestore Quota Exceeded Workspace Banner */}
+        {isQuotaExceeded && (
+          <div className="p-4 bg-amber-500/15 border border-amber-500/25 rounded-2xl flex flex-col sm:flex-row items-center sm:items-start justify-between gap-4 animate-fadeIn text-slate-800 leading-snug shadow-sm" id="quota-warning-banner-workspace">
+            <div className="space-y-1 text-center sm:text-left flex items-start gap-3">
+              <span className="text-xl shrink-0 mt-0.5">⚠️</span>
+              <div>
+                <h4 className="font-extrabold text-amber-950 text-xs uppercase tracking-wider">
+                  Sincronización Limitada: Límite de Escritura en la Base de Datos Excedido
+                </h4>
+                <p className="text-slate-700 text-xs mt-1">
+                  Se ha alcanzado la cuota de escritura gratuita de la base de datos Firestore. Tu trabajo actual se guardará de forma <strong className="text-slate-900">local en este navegador</strong>, pero las nuevas modificaciones <strong className="text-amber-800">no se sincronizarán en tiempo real en el servidor</strong> para otros usuarios hasta que se restablezca el límite diario.
+                </p>
+                <div className="mt-2 text-[10.5px] text-slate-650 space-y-1 pl-4 border-l-2 border-amber-400">
+                  <p><strong>Detalles importantes:</strong></p>
+                  <ul className="list-disc pl-4 space-y-0.5 text-slate-600">
+                    <li>La cuota gratuita se restablecerá automáticamente mañana (aproximadamente a mediodía UTC).</li>
+                    <li>Puedes ver la cuota restante de la edición Enterprise (Spark plan) en la <a href="https://firebase.google.com/pricing#cloud-firestore" target="_blank" rel="noreferrer" className="underline text-indigo-600 hover:text-indigo-800 font-bold">Guía de precios de Firebase</a>.</li>
+                  </ul>
+                  <p className="mt-2 pt-2 border-t border-amber-500/10"><strong>Si eres el Administrador y deseas habilitar más cuota de inmediato:</strong></p>
+                  <a 
+                    href="https://console.firebase.google.com/project/boda-webpage/firestore/databases/ai-studio-6bfdacd0-fdfe-4e8a-82c9-6343fc69856f/data?openUpgradeDialog=true" 
+                    target="_blank" 
+                    rel="noreferrer" 
+                    className="inline-block bg-indigo-650 hover:bg-indigo-755 text-white font-bold text-xxs px-3 py-1.5 rounded-lg transition mt-1 select-none cursor-pointer"
+                  >
+                    Abrir Consola de Base de Datos Firebase (Upgrade)
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Offline Warning Alert when Anonymous Auth is disabled on the project */}
+        {syncOffline && (
+          <div className="p-4 bg-amber-50/80 border border-amber-200 rounded-2xl flex flex-col sm:flex-row items-center sm:items-start justify-between gap-4 animate-fadeIn text-amber-900 leading-snug shadow-sm">
+            <div className="space-y-1 text-center sm:text-left flex items-start gap-3">
+              <span className="text-xl shrink-0 mt-0.5">⚠️</span>
+              <div>
+                <h4 className="font-extrabold text-amber-950 text-xs uppercase tracking-wider">
+                  Base de Datos en Modo Local (Sincronización en la Nube Desactivada)
+                </h4>
+                <p className="text-amber-850 text-xs mt-1">
+                  Tu sesión actual se está guardando localmente pero <strong>no se está sincronizando en tiempo real con otros usuarios</strong>. Esto ocurre porque el proveedor de <strong>Inicio de sesión Anónimo (Anonymous Auth)</strong> está desactivado en la consola de Firebase.
+                </p>
+                <div className="mt-2 text-[10.5px] text-amber-900 space-y-1">
+                  <p><strong>Para solucionarlo y tener sincronización global en tiempo real:</strong></p>
+                  <ol className="list-decimal pl-4 space-y-0.5 text-amber-850">
+                    <li>Abre tu <a href="https://console.firebase.google.com/" target="_blank" rel="noreferrer" className="underline font-bold text-amber-950 hover:text-amber-900">Consola de Firebase (Firebase Console)</a>.</li>
+                    <li>Ve a <strong>Authentication &gt; Sign-in method</strong>.</li>
+                    <li>Haz clic en <strong>"Add new provider" / "Añadir nuevo proveedor"</strong> y selecciona <strong>Anonymous (Anónimo)</strong>.</li>
+                    <li>Activa la casilla <strong>"Enable / Habilitar"</strong> y guarda la configuración.</li>
+                  </ol>
+                  <p className="text-xxs italic text-amber-700 mt-1">Nota: Una vez activado, cierra sesión y vuelve a entrar con tu correo y contraseña para activar la sincronización instantánea.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {/* Admin Router Title Header */}
         {activeAdminConsole && currentUser.role === 'superadmin' && (
           <div className="flex items-center gap-1 text-xs font-semibold text-slate-400 no-print border-b border-slate-100 pb-3">
@@ -1517,7 +1801,7 @@ export default function App() {
       {/* --- WORKSPACE CREATION FORM WIZARD DIALOG --- */}
       {showAddRecipeModal && (
         <div className="fixed inset-0 bg-slate-950/45 flex items-center justify-center p-4 z-50 animate-fadeIn animate-duration-150" id="add-recipe-modal">
-          <div className="bg-white rounded-3xl p-6 shadow-2xl border border-slate-100 max-w-lg w-full space-y-5 text-left">
+          <div className="bg-white rounded-3xl p-6 shadow-2xl border border-slate-100 max-w-lg w-full space-y-5 text-left max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-extrabold text-slate-900 text-sm uppercase tracking-tight flex items-center gap-2">
                 <Bookmark className="h-5 w-5 text-indigo-500" />
@@ -1638,8 +1922,26 @@ export default function App() {
                             onChange={() => {
                               if (isChecked) {
                                 setInitialIngredientsSelection(initialIngredientsSelection.filter(i => i !== opt.id));
+                                setInitialIngredientQuantities((prev) => {
+                                  const n = { ...prev };
+                                  delete n[opt.id];
+                                  return n;
+                                });
+                                setInitialIngredientUnits((prev) => {
+                                  const n = { ...prev };
+                                  delete n[opt.id];
+                                  return n;
+                                });
                               } else {
                                 setInitialIngredientsSelection([...initialIngredientsSelection, opt.id]);
+                                setInitialIngredientQuantities((prev) => ({
+                                  ...prev,
+                                  [opt.id]: opt.type === 'sub' ? '30' : '25',
+                                }));
+                                setInitialIngredientUnits((prev) => ({
+                                  ...prev,
+                                  [opt.id]: 'ml',
+                                }));
                               }
                             }}
                             className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
@@ -1651,6 +1953,75 @@ export default function App() {
                   )}
                 </div>
               </div>
+
+              {/* Configure quantities section */}
+              {initialIngredientsSelection.length > 0 && (
+                <div className="space-y-2 border-t border-slate-100 pt-3">
+                  <label className="block text-[10px] font-bold text-indigo-600 uppercase tracking-widest mb-1">
+                    Specify Initial Quantities and Units
+                  </label>
+                  <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                    {initialIngredientsSelection.map((id) => {
+                      const option = prefillSelectorOptions.find((opt) => opt.id === id);
+                      if (!option) return null;
+                      const currentQty = initialIngredientQuantities[id] !== undefined ? initialIngredientQuantities[id] : (option.type === 'sub' ? '30' : '25');
+                      const currentUnit = initialIngredientUnits[id] || 'ml';
+
+                      return (
+                        <div key={id} className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-100">
+                          <span className="text-slate-850 font-semibold font-sans flex-1 truncate text-[11px] text-slate-800">
+                            {option.name}
+                          </span>
+                          
+                          {/* Quantity Input */}
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              min="0.01"
+                              step="any"
+                              required
+                              value={currentQty}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setInitialIngredientQuantities({
+                                  ...initialIngredientQuantities,
+                                  [id]: val,
+                                });
+                              }}
+                              className="w-16 px-1.5 py-1 border border-slate-200 rounded-lg text-xs text-center bg-white font-mono text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                              placeholder="Qty"
+                            />
+                          </div>
+
+                          {/* Unit Dropdown */}
+                          <div>
+                            <select
+                              value={currentUnit}
+                              onChange={(e) => {
+                                setInitialIngredientUnits({
+                                  ...initialIngredientUnits,
+                                  [id]: e.target.value as MeasurementUnit,
+                                });
+                              }}
+                              className="px-1.5 py-1 border border-slate-200 text-slate-850 rounded-lg text-xs bg-white text-[11px] focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                            >
+                              <option value="ml">ml</option>
+                              <option value="l">L</option>
+                              <option value="fl_oz">oz fl</option>
+                              <option value="g">g</option>
+                              <option value="kg">kg</option>
+                              <option value="lb">lb</option>
+                              <option value="oz">oz wt</option>
+                              <option value="each">each</option>
+                              <option value="u">u</option>
+                            </select>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div className="flex gap-2 justify-end pt-3 border-t border-slate-100">
                 <button
