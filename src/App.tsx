@@ -14,6 +14,7 @@ import IngredientCatalog from './components/IngredientCatalog';
 import RecipeCostingWorkspace from './components/RecipeCostingWorkspace';
 import EnterpriseAdminConsole from './components/EnterpriseAdminConsole';
 import BatchPrintLayout from './components/BatchPrintLayout';
+import IngredientAuditWorkspace from './components/IngredientAuditWorkspace';
 import {
   Beaker,
   Coins,
@@ -40,7 +41,8 @@ import {
   Grid,
   AlertCircle,
   Trash,
-  Printer
+  Printer,
+  ClipboardCheck
 } from 'lucide-react';
 
 function isQuotaError(error: any): boolean {
@@ -367,6 +369,7 @@ export default function App() {
   const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
   const [activeCatalogMode, setActiveCatalogMode] = useState(false);
   const [activeAdminConsole, setActiveAdminConsole] = useState(false);
+  const [activeAuditMode, setActiveAuditMode] = useState(false);
   const [recipeSearch, setRecipeSearch] = useState('');
   const [batchPrintActive, setBatchPrintActive] = useState(false);
 
@@ -1029,11 +1032,11 @@ export default function App() {
     } catch (err: any) {
       console.error(err);
       if (err.code === 'auth/cancelled-popup-request' || err.message?.includes('cancelled-popup-request')) {
-        setLoginError('El inicio de sesión fue interrumpido. Esto ocurre si se hace doble clic o si otra pestaña interfiere. Por favor, intenta de nuevo presionando una sola vez, o abre la app en una nueva pestaña.');
+        setLoginError('The login session was interrupted. This can happen if you double-click or if another browser tab interferes. Please try again with a single click, or open the app in a new tab.');
       } else if (err.code === 'auth/popup-blocked' || err.message?.includes('popup-blocked')) {
-        setLoginError('El popup de Google fue bloqueado por tu navegador. Por favor permite popups para esta página o abre la app en una nueva pestaña.');
+        setLoginError('The Google sign-in popup was blocked by your browser. Please enable popups for this site or open the app in a new tab.');
       } else {
-        setLoginError(err.message || 'Error al iniciar sesión con Google.');
+        setLoginError(err.message || 'Error signing in with Google.');
       }
     } finally {
       setIsLoggingIn(false);
@@ -1189,25 +1192,25 @@ export default function App() {
               <AlertCircle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
               <div>
                 <h4 className="text-sm font-black text-amber-400 uppercase tracking-wider leading-tight">
-                  Límite de Consumo Excedido (Firestore Quota Exceeded)
+                  Daily Consumption Limit Reached (Firestore Quota Exceeded)
                 </h4>
                 <p className="text-xs text-slate-300 leading-normal mt-1">
-                  Has alcanzado el límite de escritura gratuito diario para la base de datos de este proyecto.
+                  You have reached the free daily write limit for this project's Firestore database.
                 </p>
               </div>
             </div>
             
             <div className="text-[10px] text-slate-400 space-y-2 pl-7 border-t border-slate-800/80 pt-2.5 leading-relaxed">
               <p>
-                Tu sesión actual se guardará de manera <strong className="text-slate-200">local en este navegador</strong>, pero las modificaciones <strong className="text-amber-300">no se sincronizarán en tiempo real en la nube</strong> ni serán visibles por otros usuarios hasta que se reinicie la cuota diaria (mañana) o escales el plan de Firebase.
+                Your current session will be saved <strong className="text-slate-200">locally in your browser</strong>, but any new changes <strong className="text-amber-300">will not sync in real-time to the cloud database</strong> or be visible to other team members until the daily tier quota resets (tomorrow) or you upgrade your Firebase project.
               </p>
               <p>
-                <span className="font-bold text-slate-300 block mb-0.5">Siguiente restauración de límite:</span>
-                La cuota gratuita de Spark se reinicia mañana. Encuentra más detalles en la columna del plan **Spark** en la sección **Enterprise edition** de la <a href="https://firebase.google.com/pricing#cloud-firestore" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline font-bold">Guía de precios de Firebase</a>.
+                <span className="font-bold text-slate-300 block mb-0.5">Next Quota Reset:</span>
+                The Spark free tier quota resets tomorrow. For more information, consult the **Spark** free plan limits on the <a href="https://firebase.google.com/pricing#cloud-firestore" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline font-bold">Firebase Pricing Guide</a>.
               </p>
               <p className="bg-slate-950/60 p-2 rounded-xl border border-slate-800">
-                <span className="text-indigo-300 font-bold block mb-0.5">Enlace directo para Administradores:</span>
-                Para ver el uso de la base de datos o expandir la cuota de inmediato, ingresa aquí:
+                <span className="text-indigo-300 font-bold block mb-0.5">Direct link for Administrators:</span>
+                To monitor database requests or upgrade quota options, access the console here:
                 <a 
                   href="https://console.firebase.google.com/project/boda-webpage/firestore/databases/ai-studio-6bfdacd0-fdfe-4e8a-82c9-6343fc69856f/data?openUpgradeDialog=true" 
                   target="_blank" 
@@ -1388,6 +1391,7 @@ export default function App() {
                 setSelectedRecipeId(null);
                 setActiveCatalogMode(false);
                 setActiveAdminConsole(false);
+                setActiveAuditMode(false);
               }}
               className="w-full text-xs font-semibold px-2.5 py-1.5 bg-transparent text-slate-200 border-0 focus:ring-0 cursor-pointer bg-slate-900 rounded-md"
             >
@@ -1406,6 +1410,7 @@ export default function App() {
               setActiveAdminConsole(true);
               setActiveCatalogMode(false);
               setSelectedRecipeId(null);
+              setActiveAuditMode(false);
             }}
             className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wider transition uppercase cursor-pointer ${
               activeAdminConsole
@@ -1432,6 +1437,7 @@ export default function App() {
             setActiveCatalogMode(true);
             setSelectedRecipeId(null);
             setActiveAdminConsole(false);
+            setActiveAuditMode(false);
           }}
           className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wider transition uppercase cursor-pointer ${
             activeCatalogMode
@@ -1446,6 +1452,32 @@ export default function App() {
           </span>
           <span className="px-2 py-0.5 bg-slate-950/40 text-slate-200 rounded-md font-mono text-[9px]">
             {visibleIngredients.length}
+          </span>
+        </button>
+
+        {/* Monthly Audit View Toggle */}
+        <button
+          onClick={() => {
+            setActiveAuditMode(true);
+            setActiveCatalogMode(false);
+            setSelectedRecipeId(null);
+            setActiveAdminConsole(false);
+          }}
+          className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold tracking-wider transition uppercase cursor-pointer ${
+            activeAuditMode
+              ? 'bg-indigo-650 text-white shadow-md font-extrabold ring-2 ring-indigo-500/40'
+              : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
+          }`}
+          id="btn-sidebar-audit-toggle"
+        >
+          <span className="flex items-center gap-2">
+            <ClipboardCheck className="h-4 w-4 shrink-0 text-indigo-400" />
+            Inventory & Audit
+          </span>
+          <span className={`px-1.5 py-0.2 rounded text-[8px] font-extrabold uppercase ${
+            activeAuditMode ? 'bg-slate-900 text-indigo-300' : 'bg-slate-950/40 text-slate-400'
+          }`}>
+            AUDIT
           </span>
         </button>
 
@@ -1494,7 +1526,7 @@ export default function App() {
               id="btn-sidebar-batch-print"
             >
               <Printer className="h-4 w-4 text-indigo-400 shrink-0" />
-              <span>Imprimir todas las recetas ({visibleRecipes.length})</span>
+              <span>Print all recipes ({visibleRecipes.length})</span>
             </button>
           )}
 
@@ -1516,6 +1548,7 @@ export default function App() {
                       setSelectedRecipeId(rec.id);
                       setActiveCatalogMode(false);
                       setActiveAdminConsole(false);
+                      setActiveAuditMode(false);
                     }}
                     className={`group w-full p-2.5 rounded-xl flex items-center justify-between text-left transition relative cursor-pointer border ${
                       isActive
@@ -1589,25 +1622,25 @@ export default function App() {
               <span className="text-xl shrink-0 mt-0.5">⚠️</span>
               <div>
                 <h4 className="font-extrabold text-amber-950 text-xs uppercase tracking-wider">
-                  Sincronización Limitada: Límite de Escritura en la Base de Datos Excedido
+                  Limited Synchronization: Database Write Limit Reached
                 </h4>
                 <p className="text-slate-700 text-xs mt-1">
-                  Se ha alcanzado la cuota de escritura gratuita de la base de datos Firestore. Tu trabajo actual se guardará de forma <strong className="text-slate-900">local en este navegador</strong>, pero las nuevas modificaciones <strong className="text-amber-800">no se sincronizarán en tiempo real en el servidor</strong> para otros usuarios hasta que se restablezca el límite diario.
+                  The daily free write quota for the Firestore database has been reached. Your current changes are saved <strong className="text-slate-900">locally in this browser</strong>, but new modifications <strong className="text-amber-800">will not sync in real-time to the server</strong> for other users until the limit is restored.
                 </p>
                 <div className="mt-2 text-[10.5px] text-slate-650 space-y-1 pl-4 border-l-2 border-amber-400">
-                  <p><strong>Detalles importantes:</strong></p>
+                  <p><strong>Important details:</strong></p>
                   <ul className="list-disc pl-4 space-y-0.5 text-slate-600">
-                    <li>La cuota gratuita se restablecerá automáticamente mañana (aproximadamente a mediodía UTC).</li>
-                    <li>Puedes ver la cuota restante de la edición Enterprise (Spark plan) en la <a href="https://firebase.google.com/pricing#cloud-firestore" target="_blank" rel="noreferrer" className="underline text-indigo-600 hover:text-indigo-800 font-bold">Guía de precios de Firebase</a>.</li>
+                    <li>The free quota resets automatically tomorrow (around noon UTC).</li>
+                    <li>You can monitor the remaining quota in the Spark plan section of the <a href="https://firebase.google.com/pricing#cloud-firestore" target="_blank" rel="noreferrer" className="underline text-indigo-600 hover:text-indigo-800 font-bold">Firebase Pricing Guide</a>.</li>
                   </ul>
-                  <p className="mt-2 pt-2 border-t border-amber-500/10"><strong>Si eres el Administrador y deseas habilitar más cuota de inmediato:</strong></p>
+                  <p className="mt-2 pt-2 border-t border-amber-500/10"><strong>If you are the Administrator and wish to upgrade immediately:</strong></p>
                   <a 
                     href="https://console.firebase.google.com/project/boda-webpage/firestore/databases/ai-studio-6bfdacd0-fdfe-4e8a-82c9-6343fc69856f/data?openUpgradeDialog=true" 
                     target="_blank" 
                     rel="noreferrer" 
                     className="inline-block bg-indigo-650 hover:bg-indigo-755 text-white font-bold text-xxs px-3 py-1.5 rounded-lg transition mt-1 select-none cursor-pointer"
                   >
-                    Abrir Consola de Base de Datos Firebase (Upgrade)
+                    Open Firebase Database Console (Upgrade)
                   </a>
                 </div>
               </div>
@@ -1622,20 +1655,20 @@ export default function App() {
               <span className="text-xl shrink-0 mt-0.5">⚠️</span>
               <div>
                 <h4 className="font-extrabold text-amber-950 text-xs uppercase tracking-wider">
-                  Base de Datos en Modo Local (Sincronización en la Nube Desactivada)
+                  Database in Local Mode (Cloud Sync Disabled)
                 </h4>
                 <p className="text-amber-850 text-xs mt-1">
-                  Tu sesión actual se está guardando localmente pero <strong>no se está sincronizando en tiempo real con otros usuarios</strong>. Esto ocurre porque el proveedor de <strong>Inicio de sesión Anónimo (Anonymous Auth)</strong> está desactivado en la consola de Firebase.
+                  Your current session is being saved locally but <strong>is not syncing in real-time with other users</strong>. This occurs because the <strong>Anonymous Auth</strong> provider is disabled in the Firebase Console.
                 </p>
                 <div className="mt-2 text-[10.5px] text-amber-900 space-y-1">
-                  <p><strong>Para solucionarlo y tener sincronización global en tiempo real:</strong></p>
+                  <p><strong>To resolve this and activate real-time global syncing:</strong></p>
                   <ol className="list-decimal pl-4 space-y-0.5 text-amber-850">
-                    <li>Abre tu <a href="https://console.firebase.google.com/" target="_blank" rel="noreferrer" className="underline font-bold text-amber-950 hover:text-amber-900">Consola de Firebase (Firebase Console)</a>.</li>
-                    <li>Ve a <strong>Authentication &gt; Sign-in method</strong>.</li>
-                    <li>Haz clic en <strong>"Add new provider" / "Añadir nuevo proveedor"</strong> y selecciona <strong>Anonymous (Anónimo)</strong>.</li>
-                    <li>Activa la casilla <strong>"Enable / Habilitar"</strong> y guarda la configuración.</li>
+                    <li>Open your <a href="https://console.firebase.google.com/" target="_blank" rel="noreferrer" className="underline font-bold text-amber-950 hover:text-amber-900">Firebase Console</a>.</li>
+                    <li>Navigate to <strong>Authentication &gt; Sign-in method</strong>.</li>
+                    <li>Click <strong>"Add new provider"</strong> and select <strong>Anonymous</strong>.</li>
+                    <li>Turn on the <strong>"Enable"</strong> switch, then click save.</li>
                   </ol>
-                  <p className="text-xxs italic text-amber-700 mt-1">Nota: Una vez activado, cierra sesión y vuelve a entrar con tu correo y contraseña para activar la sincronización instantánea.</p>
+                  <p className="text-xxs italic text-amber-700 mt-1">Note: Once enabled, sign out and sign back in with your credentials to initialize instant syncing.</p>
                 </div>
               </div>
             </div>
@@ -1679,6 +1712,14 @@ export default function App() {
           </div>
         )}
 
+        {!activeAdminConsole && activeAuditMode && (
+          <div className="flex items-center gap-1 text-xs font-semibold text-slate-400 no-print border-b border-slate-100 pb-3">
+            <span className="uppercase tracking-widest text-[9px]">Administrative Audit Centre</span>
+            <ArrowRight className="h-3 w-3 text-slate-350" />
+            <span className="text-slate-800 font-extrabold text-sm text-indigo-650">Inventory Stock Take & Suggested Reorders</span>
+          </div>
+        )}
+
         {/* Dynamic Admin Console Component Panel */}
         {activeAdminConsole && currentUser.role === 'superadmin' && (
           <div className="animate-fadeIn">
@@ -1693,7 +1734,7 @@ export default function App() {
         )}
 
         {/* Dashboard Welcomer Summary Panel */}
-        {!activeAdminConsole && !activeRecipe && !activeCatalogMode && (
+        {!activeAdminConsole && !activeRecipe && !activeCatalogMode && !activeAuditMode && (
           <div className="space-y-6 no-print">
             <div className="p-8 bg-slate-900 rounded-3xl text-slate-100 border border-slate-800 relative overflow-hidden">
               <div className="absolute right-0 top-0 opacity-5 transform translate-x-12 -translate-y-12 scale-150">
@@ -1811,8 +1852,19 @@ export default function App() {
           </div>
         )}
 
+        {/* Ingredient Monthly Audit Workspace Rendering */}
+        {!activeAdminConsole && activeAuditMode && (
+          <div>
+            <IngredientAuditWorkspace
+              ingredients={ingredients}
+              currentUser={currentUser}
+              tenants={tenants}
+            />
+          </div>
+        )}
+
         {/* Costing calculation Workspace Pane Rendering */}
-        {!activeAdminConsole && !activeCatalogMode && activeRecipe && (
+        {!activeAdminConsole && !activeCatalogMode && !activeAuditMode && activeRecipe && (
           <RecipeCostingWorkspace
             recipe={activeRecipe}
             recipes={recipes} // Provide references to search sub-recipes

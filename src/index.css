@@ -43,7 +43,8 @@
 
   /* Standard formatting for sheets and compiled blocks */
   #print-sheet-content, 
-  .printable-section {
+  .printable-section,
+  .print-sheet-compilation {
     display: block !important;
     width: 100% !important;
     max-width: 100% !important;
