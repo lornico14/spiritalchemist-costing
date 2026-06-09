@@ -18,29 +18,46 @@
     print-color-adjust: exact !important;
   }
 
-  /* Hide entire dashboard shell, sidebar navigation, buttons, and system controls */
-  #main-dashboard-wrapper,
+  /* Do not hide the master app container, but render it as normal block flow */
+  #main-dashboard-wrapper {
+    display: block !important;
+    background: #ffffff !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    min-height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Hide navigation sidebar, tabs selector bar, banners, other interaction controls */
   aside,
   header,
   #workspace-tabs-navigator,
   button,
   .fixed,
-  .no-print {
+  .no-print,
+  #quota-warning-banner-workspace,
+  #quota-warning-banner-login,
+  #batch-print-workbench-layout > div.no-print {
     display: none !important;
   }
 
-  /* Make print sheet block occupy 100% of physical viewport height and width */
-  #print-sheet-content {
+  /* Standard formatting for sheets and compiled blocks */
+  #print-sheet-content, 
+  .printable-section {
     display: block !important;
     width: 100% !important;
     max-width: 100% !important;
     border: none !important;
     box-shadow: none !important;
-    padding: 1cm !important;
+    padding: 1.5cm !important;
     margin: 0 !important;
-    position: absolute;
-    left: 0;
-    top: 0;
+    position: relative !important;
+    left: auto !important;
+    top: auto !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    background: #ffffff !important;
+    color: #000000 !important;
   }
 }
 

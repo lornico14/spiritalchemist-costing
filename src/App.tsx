@@ -13,6 +13,7 @@ import { calculateIngredientCost, calculateVersionCostWithSubrecipes, getRecipeT
 import IngredientCatalog from './components/IngredientCatalog';
 import RecipeCostingWorkspace from './components/RecipeCostingWorkspace';
 import EnterpriseAdminConsole from './components/EnterpriseAdminConsole';
+import BatchPrintLayout from './components/BatchPrintLayout';
 import {
   Beaker,
   Coins,
@@ -38,7 +39,8 @@ import {
   Lock,
   Grid,
   AlertCircle,
-  Trash
+  Trash,
+  Printer
 } from 'lucide-react';
 
 function isQuotaError(error: any): boolean {
@@ -366,6 +368,7 @@ export default function App() {
   const [activeCatalogMode, setActiveCatalogMode] = useState(false);
   const [activeAdminConsole, setActiveAdminConsole] = useState(false);
   const [recipeSearch, setRecipeSearch] = useState('');
+  const [batchPrintActive, setBatchPrintActive] = useState(false);
 
   // Superadmin view-filter (for auditing specific tenants)
   const [adminViewTenantId, setAdminViewTenantId] = useState<string>('all');
@@ -1314,6 +1317,19 @@ export default function App() {
   }
 
   // --- ACTIVE APP LAYOUT ---
+  if (batchPrintActive) {
+    return (
+      <BatchPrintLayout
+        visibleRecipes={visibleRecipes}
+        allRecipes={recipes}
+        masterIngredients={ingredients}
+        tenants={tenants}
+        currentTenantId={currentUser.role === 'superadmin' ? adminViewTenantId : currentUser.tenantId}
+        onClose={() => setBatchPrintActive(false)}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans text-slate-700 animate-fadeIn" id="main-dashboard-wrapper">
       {/* LEFT SIDEBAR: Search and Recipes Picker */}
@@ -1469,6 +1485,18 @@ export default function App() {
               className="w-full pl-9 pr-3 py-1.5 bg-slate-800 hover:bg-slate-750/70 border border-slate-750 focus:border-indigo-500 focus:outline-none rounded-xl text-xs text-slate-200 placeholder-slate-500 transition font-medium"
             />
           </div>
+
+          {/* Batch Print All Venue Recipes */}
+          {visibleRecipes.length > 0 && (
+            <button
+              onClick={() => setBatchPrintActive(true)}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-indigo-600/15 hover:bg-indigo-600/25 text-indigo-300 hover:text-white text-xs font-bold rounded-xl transition cursor-pointer border border-indigo-500/20 shadow-xs"
+              id="btn-sidebar-batch-print"
+            >
+              <Printer className="h-4 w-4 text-indigo-400 shrink-0" />
+              <span>Imprimir todas las recetas ({visibleRecipes.length})</span>
+            </button>
+          )}
 
           {/* Recipes Listing Container */}
           <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 min-h-[200px]" id="recipes-scrollable-box">
