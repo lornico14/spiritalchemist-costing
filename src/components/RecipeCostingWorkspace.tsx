@@ -55,7 +55,7 @@ export default function RecipeCostingWorkspace({
   tenants = [],
   onDeleteRecipe
 }: RecipeCostingWorkspaceProps) {
-  const [activeTab, setActiveTab] = useState<'costing' | 'history' | 'print'>('costing');
+  const [activeTab, setActiveTab] = useState<'costing' | 'history' | 'print' | 'guide'>('costing');
 
   // Permissions check — client users cannot mutate Corporate Standard templates
   const isReadOnly = useMemo(() => {
@@ -75,6 +75,7 @@ export default function RecipeCostingWorkspace({
   const [editedName, setEditedName] = useState(recipe.name);
   const [editedDescription, setEditedDescription] = useState(recipe.description);
   const [editedTenantId, setEditedTenantId] = useState(recipe.tenantId || 'global');
+  const [editedRetailPrice, setEditedRetailPrice] = useState<number>(recipe.retailPrice || 0);
 
   // Working draft for recipe items
   const [editIngredients, setEditIngredients] = useState<RecipeIngredient[]>([]);
@@ -84,6 +85,10 @@ export default function RecipeCostingWorkspace({
   // Version comments modal
   const [showSaveVersionModal, setShowSaveVersionModal] = useState(false);
   const [versionNote, setVersionNote] = useState('');
+
+  // Interactive local simulation price state
+  const [simulatedPrice, setSimulatedPrice] = useState<number>(0);
+  const [lastRecipeId, setLastRecipeId] = useState<string>('');
 
   // Active snapshot representation
   const latestVersionSnapshot = useMemo(() => {
@@ -135,15 +140,46 @@ export default function RecipeCostingWorkspace({
     return activeTotalCost / latestVersionSnapshot.batchYieldValue;
   }, [activeTotalCost, latestVersionSnapshot]);
 
+  // Cost per single portion / serving (yield unit of 'porciones' or 'botellas' uses activeCostPerUnit, otherwise entire batch is 1 serving)
+  const activeServingCost = useMemo(() => {
+    if (latestVersionSnapshot.batchYieldUnit === 'porciones' || latestVersionSnapshot.batchYieldUnit === 'botellas') {
+      return activeCostPerUnit;
+    }
+    return activeTotalCost;
+  }, [activeTotalCost, activeCostPerUnit, latestVersionSnapshot]);
+
+  // Dynamic step for sales price slider based on serving cost currency scale
+  const dynamicStep = useMemo(() => {
+    if (activeServingCost > 5000) return 500;
+    if (activeServingCost > 1000) return 100;
+    if (activeServingCost > 100) return 5;
+    return 0.25;
+  }, [activeServingCost]);
+
   // Start editor draft mode
   const handleStartEditing = () => {
     setEditedName(recipe.name);
     setEditedDescription(recipe.description);
     setEditedTenantId(recipe.tenantId || 'global');
+    setEditedRetailPrice(recipe.retailPrice || 0);
     setEditIngredients([...latestVersionSnapshot.ingredients]);
     setEditYieldValue(latestVersionSnapshot.batchYieldValue);
     setEditYieldUnit(latestVersionSnapshot.batchYieldUnit);
     setIsEditing(true);
+  };
+
+  // Keep simulated price synced to active recipe changes
+  if (recipe.id !== lastRecipeId) {
+    setSimulatedPrice(recipe.retailPrice || (activeServingCost > 0 ? Number((activeServingCost * 4).toFixed(2)) : 10.00));
+    setLastRecipeId(recipe.id);
+  }
+
+  const handleQuickSaveRetailPrice = (priceVal: number) => {
+    const updatedRecipe: Recipe = {
+      ...recipe,
+      retailPrice: Number(priceVal.toFixed(2)),
+    };
+    onUpdateRecipe(updatedRecipe);
   };
 
   // Cancel edit
@@ -249,6 +285,7 @@ export default function RecipeCostingWorkspace({
       tenantId: editedTenantId,
       currentVersion: nextVerNumber,
       versions: [newVersionObj, ...recipe.versions], // pre-pended so index 0 is newest
+      retailPrice: Number(editedRetailPrice) || 0,
     };
 
     onUpdateRecipe(updatedRecipe);
@@ -374,7 +411,7 @@ export default function RecipeCostingWorkspace({
 
             {isEditing ? (
               <div className="space-y-4 mt-2 pr-0 md:pr-10">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className={`grid grid-cols-1 ${recipe.type === 'bebida' ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-4`}>
                   <div className="md:col-span-2">
                     <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Recipe Name *</label>
                     <input
@@ -408,6 +445,20 @@ export default function RecipeCostingWorkspace({
                       </div>
                     )}
                   </div>
+                  {recipe.type === 'bebida' && (
+                    <div>
+                      <label className="block text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-1">Retail Price ($) *</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={editedRetailPrice || ''}
+                        onChange={(e) => setEditedRetailPrice(Math.max(0, Number(e.target.value) || 0))}
+                        className="w-full text-xs font-bold font-mono text-slate-800 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white px-3 py-2 h-[38px]"
+                        placeholder="e.g. 12.00"
+                      />
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Directions & Description</label>
@@ -472,7 +523,7 @@ export default function RecipeCostingWorkspace({
                     <button
                       onClick={() => onDeleteRecipe(recipe)}
                       className="px-3 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 font-semibold text-xs rounded-xl transition cursor-pointer border border-rose-150 inline-flex items-center gap-1.5 shrink-0"
-                      title="Borrar esta receta de una vez"
+                      title="Delete this recipe permanently"
                     >
                       <Trash className="h-4 w-4" />
                       <span>Delete Recipe</span>
@@ -518,6 +569,17 @@ export default function RecipeCostingWorkspace({
           >
             <Printer className="h-4 w-4" />
             Printable Sheet / PDF
+          </button>
+          <button
+            onClick={() => setActiveTab('guide')}
+            className={`flex items-center gap-2 px-4 py-2.5 font-bold text-xs transition border-b-2 cursor-pointer ${
+              activeTab === 'guide'
+                ? 'border-indigo-600 text-indigo-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <FileText className="h-4 w-4" />
+            Recipe Manual & Guide
           </button>
         </div>
       </div>
@@ -615,6 +677,163 @@ export default function RecipeCostingWorkspace({
               <div className="text-indigo-500 text-xxs mt-1">Standard metric for liquid items</div>
             </div>
           </div>
+
+          {/* Interactive Pricing Simulator & Margin Estimator (Only for Finished Cocktails / Beverages) */}
+          {!isEditing && recipe.type === 'bebida' && (
+            <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm space-y-4 bg-linear-to-r from-indigo-50/10 to-transparent">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-50 pb-3">
+                <div className="space-y-0.5">
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-1.5">
+                    <TrendingUp className="h-4 w-4 text-emerald-500" />
+                    <span>Interactive Pricing Simulator & Margin Estimator</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Simulate retail menu prices to instantly calculate guest food cost percentages and profit margins based on recipe cost per serving.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] uppercase font-bold text-slate-400">Current Standard Price:</span>
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 font-mono">
+                    {recipe.retailPrice ? formatCurrency(recipe.retailPrice) : 'Not configured'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-center">
+                {/* Simulator Slider Box */}
+                <div className="lg:col-span-2 space-y-4 border-b lg:border-b-0 lg:border-r border-slate-100 pb-4 lg:pb-0 lg:pr-6">
+                  <div className="flex justify-between items-center text-xs font-semibold">
+                    <span className="text-slate-550">Simulated Retail Price (Type to Edit):</span>
+                    <div className="relative flex items-center">
+                      <span className="absolute left-3 text-xs font-bold text-indigo-400 font-mono">$</span>
+                      <input
+                        type="number"
+                        id="price-simulator-input"
+                        min="0"
+                        step="0.01"
+                        value={simulatedPrice === 0 ? "" : simulatedPrice}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setSimulatedPrice(isNaN(val) ? 0 : val);
+                        }}
+                        className="w-28 pl-7 pr-3 py-1.5 text-right text-sm font-black text-indigo-750 font-mono bg-indigo-50 hover:bg-indigo-100/50 focus:bg-white rounded-lg border border-indigo-200 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 transition"
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <span className="text-xxs font-mono text-slate-400 font-bold">{formatCurrency(Math.max(1, Math.round(activeServingCost)))}</span>
+                    <input
+                      type="range"
+                      min={Math.max(1, Number((activeServingCost).toFixed(2)))}
+                      max={Math.max(12, Number((activeServingCost * 12).toFixed(2)))}
+                      step={dynamicStep}
+                      value={simulatedPrice || Math.max(1, activeServingCost * 4)}
+                      onChange={(e) => setSimulatedPrice(Number(e.target.value) || 1)}
+                      className="flex-1 h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-indigo-650 border border-slate-200/40"
+                    />
+                    <span className="text-xxs font-mono text-slate-400 font-bold">{formatCurrency(Math.max(25, Math.round(activeServingCost * 10)))}</span>
+                  </div>
+
+                  {/* Preset quick target triggers */}
+                  <div className="space-y-1.5">
+                    <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Quick F&B Cost Targets:</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        onClick={() => setSimulatedPrice(Number((activeServingCost / 0.18).toFixed(2)))}
+                        className="text-[10px] font-extrabold px-2.5 py-1 rounded bg-slate-50 hover:bg-slate-100 text-indigo-600 border border-slate-150 transition cursor-pointer"
+                        title="Establishment target of 18% cost ratio (5.5x markup multiplier)"
+                      >
+                        18% Cost (5.5x)
+                      </button>
+                      <button
+                        onClick={() => setSimulatedPrice(Number((activeServingCost / 0.22).toFixed(2)))}
+                        className="text-[10px] font-extrabold px-2.5 py-1 rounded bg-slate-50 hover:bg-slate-100 text-indigo-600 border border-slate-150 transition cursor-pointer"
+                        title="Establishment target of 22% cost ratio (4.5x markup multiplier)"
+                      >
+                        22% Cost (4.5x)
+                      </button>
+                      <button
+                        onClick={() => setSimulatedPrice(Number((activeServingCost / 0.25).toFixed(2)))}
+                        className="text-[10px] font-extrabold px-2.5 py-1 rounded bg-indigo-50/50 hover:bg-indigo-100/50 text-indigo-600 border border-indigo-150 transition cursor-pointer font-bold"
+                        title="Traditional bar rule of thumb: 25% cost ratio (4.0x markup multiplier)"
+                      >
+                        25% Cost (4.0x)
+                      </button>
+                      <button
+                        onClick={() => setSimulatedPrice(Number((activeServingCost / 0.33).toFixed(2)))}
+                        className="text-[10px] font-extrabold px-2.5 py-1 rounded bg-slate-50 hover:bg-slate-100 text-indigo-600 border border-slate-150 transition cursor-pointer"
+                        title="Maximum threshold: 33% cost ratio (3.0x markup multiplier)"
+                      >
+                        33% Cost (3.0x)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Key Metrics Columns */}
+                <div className="lg:col-span-2 grid grid-cols-2 md:grid-cols-3 gap-3">
+                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1 text-center">
+                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">F&B Beverage Cost %</span>
+                    <div className="flex items-center justify-center gap-1 mt-1">
+                      <span className={`text-lg font-black font-mono leading-none ${
+                        simulatedPrice > 0 && (activeServingCost / simulatedPrice) * 100 <= 20 
+                          ? 'text-emerald-600' 
+                          : simulatedPrice > 0 && (activeServingCost / simulatedPrice) * 100 <= 28 
+                          ? 'text-amber-500' 
+                          : 'text-rose-500'
+                      }`}>
+                        {simulatedPrice > 0 ? ((activeServingCost / simulatedPrice) * 100).toFixed(1) : '100.0'}%
+                      </span>
+                    </div>
+                    <span className="text-[8px] text-slate-400 block font-semibold">Lower is more profitable</span>
+                  </div>
+
+                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1 text-center">
+                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Gross Profit (Value)</span>
+                    <div className="flex items-center justify-center mt-1">
+                      <span className="text-lg font-black text-emerald-600 font-mono leading-none">
+                        {formatCurrency(Math.max(0, simulatedPrice - activeServingCost))}
+                      </span>
+                    </div>
+                    <span className="text-[8px] text-slate-400 block font-semibold">Net profit per serving</span>
+                  </div>
+
+                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1 text-center col-span-2 md:col-span-1">
+                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Gross Margin %</span>
+                    <div className="flex items-center justify-center mt-1">
+                      <span className="text-lg font-black text-indigo-650 font-mono leading-none">
+                        {simulatedPrice > 0 ? (((simulatedPrice - activeServingCost) / simulatedPrice) * 100).toFixed(1) : '0.0'}%
+                      </span>
+                    </div>
+                    <span className="text-[8px] text-slate-400 block font-mono">
+                      {simulatedPrice > 0 && activeServingCost > 0 ? (simulatedPrice / activeServingCost).toFixed(1) : '0'}x markup
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick persistent update */}
+              <div className="bg-indigo-50/30 border border-indigo-100/50 p-3 rounded-2xl flex items-center justify-between text-xs gap-3 flex-wrap">
+                <p className="text-indigo-900 font-medium">
+                  Would you like to establish the simulated price of <strong>{formatCurrency(simulatedPrice)}</strong> as your active standard sales price?
+                </p>
+                <button
+                  onClick={() => handleQuickSaveRetailPrice(simulatedPrice)}
+                  disabled={isReadOnly}
+                  className={`px-4.5 py-1.5 font-bold text-xs rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer ${
+                    isReadOnly 
+                      ? 'bg-slate-105 text-slate-400 cursor-not-allowed border border-slate-200' 
+                      : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                  }`}
+                >
+                  <Save className="h-3 w-3" />
+                  Apply & Save Price
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Interactive Costing Table */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-4">
@@ -1026,6 +1245,27 @@ export default function RecipeCostingWorkspace({
               </div>
             </div>
 
+            {recipe.type === 'bebida' && recipe.retailPrice ? (
+              <div className="grid grid-cols-3 gap-4 p-4 bg-indigo-50/25 border border-indigo-100 rounded-xl text-xs">
+                <div>
+                  <div className="text-[10px] text-indigo-600 font-extrabold uppercase">Standard Retail Price</div>
+                  <div className="text-sm font-black text-indigo-950 mt-0.5 font-mono">{formatCurrency(recipe.retailPrice)}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-indigo-600 font-extrabold uppercase">F&B Cost % Ratio</div>
+                  <div className="text-sm font-black text-emerald-750 mt-0.5 font-mono">
+                    {((activeServingCost / recipe.retailPrice) * 100).toFixed(1)}%
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-indigo-600 font-extrabold uppercase font-sans">Gross Profit Margin %</div>
+                  <div className="text-sm font-black text-indigo-900 mt-0.5 font-mono">
+                    {(((recipe.retailPrice - activeServingCost) / recipe.retailPrice) * 100).toFixed(1)}%
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
             {/* Description */}
             <div className="space-y-1.5">
               <h4 className="text-xs font-bold text-slate-800 uppercase tracking-widest">Description & Custom Instructions</h4>
@@ -1105,6 +1345,89 @@ export default function RecipeCostingWorkspace({
                   <div className="font-bold text-slate-800">Finance & Cost Approval</div>
                   <div className="text-[10px] text-slate-400">Target Profit Margin Validation</div>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- RECONCILED DYNAMIC DRINK MANUAL & OPERATION GUIDES --- */}
+      {activeTab === 'guide' && (
+        <div className="bg-white rounded-2xl border border-slate-100 p-6 sm:p-8 shadow-sm space-y-6">
+          <div className="border-b border-slate-100 pb-4 space-y-1">
+            <h2 className="text-lg font-extrabold text-slate-800 tracking-tight flex items-center gap-2">
+              <FileText className="h-5.5 w-5.5 text-indigo-600" />
+              Beverage Formulation & Cost Control Manual
+            </h2>
+            <p className="text-slate-550 text-xs leading-relaxed">
+              Step-by-step technical standard operating procedures (SOP) to add, modify, delete, and control bar assets, ingredient inventories, and compound sub-recipes.
+            </p>
+          </div>
+
+          <div className="space-y-6 text-xs text-slate-600 leading-relaxed text-left">
+            {/* Section 1 */}
+            <div className="p-5 bg-slate-50 border border-slate-100 rounded-xl space-y-2.5">
+              <h3 className="text-sm font-extrabold text-slate-850 flex items-center gap-1.5 uppercase tracking-wide">
+                <span className="h-5 w-5 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-black font-sans text-xs shrink-0">1</span>
+                Managing the Ingredients Catalog
+              </h3>
+              <p>
+                The <strong>Ingredient Catalog</strong> houses raw materials (e.g. spirits, purées, liqueurs, citrus, sugars) with their container pricing. Cost conversions are computed down to individual cubic milliliters (ml) or grams (g).
+              </p>
+              <div className="pl-4 border-l-2 border-indigo-500 space-y-2 font-medium">
+                <p>
+                  <strong className="text-slate-800">➕ Add New Ingredients:</strong> Navigate to the <strong>Ingredient Catalog</strong> view from the sidebar. Click on the <strong>"Create New Ingredient"</strong> button. Enter the commercial name, supplier purchase price, container dosage volume/weight (e.g., a bottle of standard gin is <code className="font-mono bg-slate-100 px-1 rounded">750 ml</code> at <code className="font-mono bg-indigo-50 px-1 rounded text-indigo-600">$18,000 COP</code>), and group category.
+                </p>
+                <p>
+                  <strong className="text-slate-800">✏️ Modify Existing Items:</strong> Click on any row inside the ingredient catalog to toggle its editor. You can update price variations, product links, and relative densities. Hit **Save** to apply globally.
+                </p>
+                <p>
+                  <strong className="text-slate-800">❌ Remove Ingredients:</strong> Click the <strong>Trash (Delete)</strong> button at the end of the item row. Any deleted ingredient will notify active formulas that use it, keeping you protected from broken links!
+                </p>
+              </div>
+            </div>
+
+            {/* Section 2 */}
+            <div className="p-5 bg-slate-50 border border-slate-100 rounded-xl space-y-2.5">
+              <h3 className="text-sm font-extrabold text-slate-850 flex items-center gap-1.5 uppercase tracking-wide">
+                <span className="h-5 w-5 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-black font-sans text-xs shrink-0">2</span>
+                Building & Linking Recipes
+              </h3>
+              <p>
+                Recipes are designated as either a <strong>Final Drink</strong> (served directly to guests) or a <strong>⭐ Base Sub-Recipe</strong> (batched syrups, infusions, cordial pre-mixes, or citrus blends used to charge other main cocktails).
+              </p>
+              <div className="pl-4 border-l-2 border-indigo-500 space-y-2 font-medium">
+                <p>
+                  <strong className="text-slate-800">⭐ Using Sub-Recipes as Ingredients:</strong> When formulating a final cocktail, you don't need to rebuild syrups. You can select your prepared <strong>[Sub-Recipe]</strong> directly from the standard ingredient dropdown. The cost matrix dynamically resolves nested costs in real-time!
+                </p>
+                <p>
+                  <strong className="text-slate-800">✏️ Editing Recipe Formulas & Dosages:</strong> Open the target recipe, click <strong>"Modify Recipe & Costings"</strong>, and click <strong>"Add Ingredient or Sub-recipe"</strong>. Match the exact volume or countable unit (e.g. <code className="font-mono">45 ml</code> Gin, or <code className="font-mono font-bold text-amber-600">⭐ 20 ml Citrus batch Syrup</code>).
+                </p>
+                <p>
+                  <strong className="text-slate-800">📦 Yield Configuration:</strong> Crucially determine the final <strong>"Net Yield"</strong> of your formulation (e.g. if the batch yields <code className="font-mono bg-slate-100 px-1 rounded">500 ml</code> of syrup, set Batch Yield to <code className="font-mono">500</code> and unit to <code className="font-mono">ml</code>). This divides overall costs down to unit milliliters perfectly.
+                </p>
+                <p>
+                  <strong className="text-slate-800">💾 Version Safe snapshots:</strong> Every time you modify ingredients, clicking <strong>"Save Changes"</strong> prompts a version change-log comment. This secures historical snapshots, letting you compare cost improvements!
+                </p>
+              </div>
+            </div>
+
+            {/* Section 3 */}
+            <div className="p-5 bg-slate-50 border border-slate-100 rounded-xl space-y-2.5">
+              <h3 className="text-sm font-extrabold text-slate-850 flex items-center gap-1.5 uppercase tracking-wide">
+                <span className="h-5 w-5 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-black font-sans text-xs shrink-0">3</span>
+                Understanding Retail Prices & Profit Margins
+              </h3>
+              <p>
+                 For finished cocktails, the interactive Pricing Tool calculates optimal sales targets automatically, matching traditional high-end bar standards.
+              </p>
+              <div className="pl-4 border-l-2 border-indigo-500 space-y-2 font-medium">
+                <p>
+                  <strong className="text-slate-800">⚖️ F&B Cost Ratio (%):</strong> Refers to the cost of liquid ingredients spent vs sales price. Target ratios for profitability should hover between <span className="text-emerald-700 font-bold">18% and 25%</span>.
+                </p>
+                <p>
+                  <strong className="text-slate-800">🎛️ Simulation Slider:</strong> Move the interactive range slider to see immediate shifts in profitability and food cost percentages. Utilize target preset buttons (e.g., hitting <strong>"22% Cost"</strong> sets the ideal retail price mathematically). Click <strong>"Set as Active Price"</strong> to persist to memory.
+                </p>
               </div>
             </div>
           </div>

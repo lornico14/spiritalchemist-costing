@@ -63,6 +63,7 @@ export interface Recipe {
   currentVersion: number;
   versions: RecipeVersion[]; // sorted by version descending/ascending
   tenantId: string; // Owner tenant, or 'global'
+  retailPrice?: number;
 }
 
 export enum OperationType {

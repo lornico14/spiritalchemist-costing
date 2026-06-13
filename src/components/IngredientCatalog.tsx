@@ -323,18 +323,18 @@ export default function IngredientCatalog({
           <div className="p-5 bg-amber-50 border border-amber-200 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-fadeIn">
             <div className="space-y-1 text-center sm:text-left">
               <h4 className="font-extrabold text-amber-900 text-sm">
-                ¿Deseas restaurar la base de datos de demostración?
+                Would you like to restore the demo database?
               </h4>
               <p className="text-amber-750 text-xs">
-                El catálogo está completamente vacío. Pulsa el botón para cargar
-                los ingredientes y recetas de muestra de Spirit Alchemist.
+                The catalog is currently empty. Click the button to load
+                the sample ingredients and recipes from Spirit Alchemist.
               </p>
             </div>
             <button
               onClick={onRestoreDemoData}
               className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold text-xs rounded-xl shadow-sm transition shrink-0 cursor-pointer"
             >
-              Restaurar Datos de Demostración
+              Restore Demo Content
             </button>
           </div>
         )}
